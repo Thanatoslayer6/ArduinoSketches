@@ -24,7 +24,7 @@ void loop() {
 
 // Pass number of seconds in milliseconds
 void moveServoMotor(uint16_t duration) {
-    Serial.print("Moved servo motor by 180 degrees for ");
+    Serial.print("Moved servo motor by 90 degrees for ");
     Serial.print(duration);
     Serial.print(" milliseconds");
     Serial.println();
