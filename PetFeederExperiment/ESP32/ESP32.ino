@@ -46,7 +46,7 @@ void setup(){
   sendToArduino.begin(9600, SERIAL_8N1, 2, 3);
   // Initialize Camera first
   CameraInit();
-  delay(2000); // Add some delay just in case...
+  //delay(2000); // Add some delay just in case...
   // Init Wifi
   ConnectToWifi();
   // Init NTP
@@ -65,7 +65,7 @@ void setup(){
 void ConnectToMQTT() {
   // First set root certificate
   esp32cam.setCACert(root_ca);
-  client.setBufferSize(23552); // 23552
+  client.setBufferSize(32768); // around 32kb
   client.setServer(MQTTserver, MQTTport);
   client.setCallback(messageReceived);
   while (!client.connected()) {
@@ -112,7 +112,7 @@ void CameraInit() {
   //config.pixel_format = PIXFORMAT_RGB565; // for face detection/recognition
   config.grab_mode = CAMERA_GRAB_WHEN_EMPTY;
   config.fb_location = CAMERA_FB_IN_PSRAM;
-  config.jpeg_quality = 10;
+  config.jpeg_quality = 32; // From 10-63 (lower means higher quality)
   config.fb_count = 2;
 
   // camera init
@@ -127,13 +127,21 @@ void CameraInit() {
 
 void getImage() {
   camera_fb_t *fb = esp_camera_fb_get();
-  // Check if there's an image, it is a jpeg, and is less than 23552 bytes
-  if (fb != NULL && fb->format == PIXFORMAT_JPEG && fb->len < 23552) {
+  // Check if there's an image, it is a jpeg, and is less than 32kb
+  if (fb != NULL && fb->format == PIXFORMAT_JPEG && fb->len < 32768) {
     Serial.print("Image Length: ");
     Serial.print(fb->len);
-    bool result = client.publish("stream", (const char*)fb->buf, fb->len);
+    Serial.println();
+    bool result = client.publish("stream", fb->buf, fb->len);
     Serial.println(result);
+    
+    if (!result) {
+      ESP.restart();
+    }
   }
+  // Release the frame buffer
+  esp_camera_fb_return(fb);
+  delay(50); // Miniscule duration for the esp32 to gain strength
 }
 
 
@@ -221,4 +229,9 @@ void loop(){
   if (streamToggled == true && client.connected() == true) {
     getImage();
   }
+  /*
+  if (client.connected() == true) {
+    getImage();
+  }
+  */
 }
