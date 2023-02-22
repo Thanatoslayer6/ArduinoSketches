@@ -53,13 +53,6 @@ void setup(){
   configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
   // Connect to MQTT
   ConnectToMQTT();
-  /*
-  Serial.println("About to take a picture in 5 seconds quick!");
-  // Delay and get a quick snapshot
-  delay(5000);
-  getImage();
-  Serial.println("Done taking a picture! enjoy :D");
-  */
 }
 
 void ConnectToMQTT() {
@@ -82,7 +75,7 @@ void ConnectToMQTT() {
     } 
   }
   // Subscribe to the given topics
-  client.subscribe("feed_duration_response", 1);
+  client.subscribe("feed_duration", 1);
   client.subscribe("toggle_stream", 1);
 }
 
@@ -107,7 +100,7 @@ void CameraInit() {
   config.pin_pwdn = PWDN_GPIO_NUM;
   config.pin_reset = RESET_GPIO_NUM;
   config.xclk_freq_hz = 20000000;
-  config.frame_size = FRAMESIZE_VGA; // 640x480
+  config.frame_size = FRAMESIZE_VGA; // 640 x 480
   config.pixel_format = PIXFORMAT_JPEG; // for streaming
   //config.pixel_format = PIXFORMAT_RGB565; // for face detection/recognition
   config.grab_mode = CAMERA_GRAB_WHEN_EMPTY;
