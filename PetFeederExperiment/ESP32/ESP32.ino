@@ -38,21 +38,22 @@ HardwareSerial sendToArduino(1);
 WiFiClientSecure esp32cam;
 // Create mqtt client 
 PubSubClient client(esp32cam);
+
 // Necessary variables
 bool streamToggled = false;
 
 void setup(){
   Serial.begin(115200);
-  sendToArduino.begin(9600, SERIAL_8N1, 2, 3);
+  //sendToArduino.begin(9600, SERIAL_8N1, 2, 3);
   // Initialize Camera first
-  CameraInit();
+  //CameraInit();
   //delay(2000); // Add some delay just in case...
   // Init Wifi
   ConnectToWifi();
   // Init NTP
-  configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
+  //configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
   // Connect to MQTT
-  ConnectToMQTT();
+  //ConnectToMQTT();
 }
 
 void ConnectToMQTT() {
@@ -64,9 +65,9 @@ void ConnectToMQTT() {
   while (!client.connected()) {
     Serial.println("Connecting to MQTT broker...");
     // Create a random client ID
-    String clientId = "ESP32CAMClient-";
-    clientId += String(random(0xffff), HEX);
-    if (client.connect(clientId.c_str(), MQTTusername, MQTTpassword)) {
+    //String clientId = "ESP32CAMClient-";
+    //clientId += String(random(0xffff), HEX);
+    if (client.connect(PRODUCT_ID, MQTTusername, MQTTpassword)) {
       Serial.println("Connected to MQTT broker"); 
     } else {
       Serial.print("Failed to connect to MQTT broker");
@@ -75,8 +76,8 @@ void ConnectToMQTT() {
     } 
   }
   // Subscribe to the given topics
-  client.subscribe("feed_duration", 1);
-  client.subscribe("toggle_stream", 1);
+  client.subscribe(FEED_DURATION_TOPIC, 1);
+  client.subscribe(TOGGLE_STREAM_TOPIC, 1);
 }
 
 void CameraInit() {
@@ -125,7 +126,7 @@ void getImage() {
     Serial.print("Image Length: ");
     Serial.print(fb->len);
     Serial.println();
-    bool result = client.publish("stream", fb->buf, fb->len);
+    bool result = client.publish(STREAM_TOPIC, fb->buf, fb->len);
     Serial.println(result);
     
     if (!result) {
@@ -141,6 +142,7 @@ void getImage() {
 
 void ConnectToWifi() {
   // Connect to Wi-Fi
+  /*
   Serial.print("Connecting to: ");
   Serial.print(ssid);
   WiFi.begin(ssid, password);
@@ -151,7 +153,30 @@ void ConnectToWifi() {
   }
   Serial.println("WiFi connected: ");
   Serial.print(WiFi.localIP());
+  */
+  //Init WiFi as Station, start SmartConfig
+  WiFi.mode(WIFI_AP_STA);
+  WiFi.beginSmartConfig(SC_TYPE_ESPTOUCH_V2);
 
+  //Wait for SmartConfig packet from mobile
+  Serial.println("Waiting for SmartConfig.");
+  while (!WiFi.smartConfigDone()) {
+    delay(500);
+    Serial.print(".");
+  }
+
+  Serial.println("");
+  Serial.println("SmartConfig received.");
+
+  //Wait for WiFi to connect to AP
+  Serial.println("Waiting for WiFi");
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+
+  Serial.println("WiFi connected: ");
+  Serial.print(WiFi.localIP());
 }
 
 void messageReceived(char* topic, byte* payload, unsigned int length) {
@@ -181,12 +206,14 @@ void messageReceived(char* topic, byte* payload, unsigned int length) {
   }
   message[length] = '\0'; // add null terminator
   
-  if (String(topic) == "feed_duration") {
+  //if (String(topic) == String(FEED_DURATION_TOPIC)) {
+  if (strcmp(topic, FEED_DURATION_TOPIC) == 0) {
     int duration = atoi(message);
     sendToArduino.print(duration);
     // Publish something to inform client that action is successful
-    client.publish("feed_duration_response", "true");
-  } else if (String(topic) == "toggle_stream") {
+    client.publish(FEED_DURATION_RESPONSE_TOPIC, "true");
+  //} else if (String(topic) == "toggle_stream") {
+    } else if (strcmp(topic, TOGGLE_STREAM_TOPIC) == 0) {
       Serial.print(message);
       // On and Off
       if (String(message) == "on") {
