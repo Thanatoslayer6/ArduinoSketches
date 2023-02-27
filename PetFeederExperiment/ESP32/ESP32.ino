@@ -50,6 +50,7 @@ void setup(){
   //delay(2000); // Add some delay just in case...
   // Init Wifi
   ConnectToWifi();
+  //ValidateProduct(); // This will only be called once (for setting up via application)
   // Init NTP
   //configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
   // Connect to MQTT
@@ -78,6 +79,7 @@ void ConnectToMQTT() {
   // Subscribe to the given topics
   client.subscribe(FEED_DURATION_TOPIC, 1);
   client.subscribe(TOGGLE_STREAM_TOPIC, 1);
+  client.subscribe(AUTH_TOPIC, 1);
 }
 
 void CameraInit() {
@@ -141,20 +143,7 @@ void getImage() {
 
 
 void ConnectToWifi() {
-  // Connect to Wi-Fi
-  /*
-  Serial.print("Connecting to: ");
-  Serial.print(ssid);
-  WiFi.begin(ssid, password);
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
-  
-  }
-  Serial.println("WiFi connected: ");
-  Serial.print(WiFi.localIP());
-  */
-  //Init WiFi as Station, start SmartConfig
+  // Init WiFi as Station, start SmartConfig
   WiFi.mode(WIFI_AP_STA);
   WiFi.beginSmartConfig(SC_TYPE_ESPTOUCH_V2);
 
@@ -208,12 +197,12 @@ void messageReceived(char* topic, byte* payload, unsigned int length) {
   
   //if (String(topic) == String(FEED_DURATION_TOPIC)) {
   if (strcmp(topic, FEED_DURATION_TOPIC) == 0) {
-    int duration = atoi(message);
-    sendToArduino.print(duration);
-    // Publish something to inform client that action is successful
-    client.publish(FEED_DURATION_RESPONSE_TOPIC, "true");
+      int duration = atoi(message);
+      sendToArduino.print(duration);
+      // Publish something to inform client that action is successful
+      client.publish(FEED_DURATION_RESPONSE_TOPIC, "true");
   //} else if (String(topic) == "toggle_stream") {
-    } else if (strcmp(topic, TOGGLE_STREAM_TOPIC) == 0) {
+  } else if (strcmp(topic, TOGGLE_STREAM_TOPIC) == 0) {
       Serial.print(message);
       // On and Off
       if (String(message) == "on") {
@@ -221,6 +210,8 @@ void messageReceived(char* topic, byte* payload, unsigned int length) {
       } else if (String(message) == "off") {
         streamToggled = false;
       }
+  } else if (strcmp(topic, AUTH_TOPIC) == 0) {
+    Serial.print(message);
   }
 }
 
