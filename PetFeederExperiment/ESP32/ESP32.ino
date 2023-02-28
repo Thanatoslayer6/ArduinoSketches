@@ -9,6 +9,7 @@
 #include <WiFiClientSecure.h>
 #include "esp_camera.h"
 #include "secrets.h"
+#include "ArduinoJson.h"
 
 // Default camera pin definitions (Taken from ESP32CameraWebserver code)
 #define PWDN_GPIO_NUM     32
@@ -29,8 +30,6 @@
 #define PCLK_GPIO_NUM     22
 #define LED_GPIO_NUM      33
 
-//const int bufferSize = 1024 * 23; // 23552 bytes for the maximum size sending an image
-
 // Set up hardware serial to send data to the arduino
 HardwareSerial sendToArduino(1);
 
@@ -42,7 +41,7 @@ PubSubClient client(esp32cam);
 // Necessary variables
 bool streamToggled = false;
 
-void setup(){
+void setup(){ // TODO: EEPROM for wifi and ssid, also connection to database...
   Serial.begin(115200);
   //sendToArduino.begin(9600, SERIAL_8N1, 2, 3);
   // Initialize Camera first
@@ -52,9 +51,9 @@ void setup(){
   ConnectToWifi();
   //ValidateProduct(); // This will only be called once (for setting up via application)
   // Init NTP
-  //configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
+  configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
   // Connect to MQTT
-  //ConnectToMQTT();
+  ConnectToMQTT();
 }
 
 void ConnectToMQTT() {
@@ -65,9 +64,6 @@ void ConnectToMQTT() {
   client.setCallback(messageReceived);
   while (!client.connected()) {
     Serial.println("Connecting to MQTT broker...");
-    // Create a random client ID
-    //String clientId = "ESP32CAMClient-";
-    //clientId += String(random(0xffff), HEX);
     if (client.connect(PRODUCT_ID, MQTTusername, MQTTpassword)) {
       Serial.println("Connected to MQTT broker"); 
     } else {
@@ -79,6 +75,7 @@ void ConnectToMQTT() {
   // Subscribe to the given topics
   client.subscribe(FEED_DURATION_TOPIC, 1);
   client.subscribe(TOGGLE_STREAM_TOPIC, 1);
+  client.subscribe(TOGGLE_UVLIGHT_TOPIC, 1);
   client.subscribe(AUTH_TOPIC, 1);
 }
 
@@ -145,7 +142,7 @@ void getImage() {
 void ConnectToWifi() {
   // Init WiFi as Station, start SmartConfig
   WiFi.mode(WIFI_AP_STA);
-  WiFi.beginSmartConfig(SC_TYPE_ESPTOUCH_V2);
+  WiFi.beginSmartConfig();
 
   //Wait for SmartConfig packet from mobile
   Serial.println("Waiting for SmartConfig.");
@@ -166,42 +163,35 @@ void ConnectToWifi() {
 
   Serial.println("WiFi connected: ");
   Serial.print(WiFi.localIP());
+  /* 
+  // MANUAL WIFI SETUP
+  WiFi.begin(ssid, pwd);
+
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+
+  Serial.println("");
+  Serial.println("WiFi connected");
+  */
 }
 
 void messageReceived(char* topic, byte* payload, unsigned int length) {
   Serial.print("Message received on topic: ");
   Serial.println(topic);
-  /*
-  if (strcmp(topic, "feed_duration") == 0) {
-    char message[length + 1]; // allocate space for null terminator
-    for (int i = 0; i < length; i++) {
-      message[i] = (char)payload[i];
-    
-    }
-    message[length] = '\0'; // add null terminator
-    int duration = atoi(message);
-    sendToArduino.print(duration);
-    // Publish something to inform client that action is successful
-    client.publish("feed_duration_response", "true");
+
+  // ~~~~~~~~~~~ Make the message as a char[]
+  char message[length + 1];
+  memcpy(message, payload, length);
+  message[length] = '\0';
+  // ~~~~~~~~~~~ End
   
-  } else if (strcmp(topic, "toggle_stream") == 0) {
-      Serial.println((int)payload);
-  }
-  */
-  // Make the message as a char *
-  char message[length + 1]; // allocate space for null terminator
-  for (int i = 0; i < length; i++) {
-     message[i] = (char)payload[i];
-  }
-  message[length] = '\0'; // add null terminator
-  
-  //if (String(topic) == String(FEED_DURATION_TOPIC)) {
   if (strcmp(topic, FEED_DURATION_TOPIC) == 0) {
       int duration = atoi(message);
       sendToArduino.print(duration);
       // Publish something to inform client that action is successful
       client.publish(FEED_DURATION_RESPONSE_TOPIC, "true");
-  //} else if (String(topic) == "toggle_stream") {
   } else if (strcmp(topic, TOGGLE_STREAM_TOPIC) == 0) {
       Serial.print(message);
       // On and Off
@@ -211,7 +201,24 @@ void messageReceived(char* topic, byte* payload, unsigned int length) {
         streamToggled = false;
       }
   } else if (strcmp(topic, AUTH_TOPIC) == 0) {
-    Serial.print(message);
+    StaticJsonDocument<32> doc;
+    DeserializationError error = deserializeJson(doc, message);
+
+    // Check for parsing errors
+    if (error) {
+      Serial.print(F("deserializeJson() failed: "));
+      Serial.println(error.f_str());
+      return;
+    }
+
+    // Access the parsed data
+    const char* productId = doc["id"];
+    const char* productPwd = doc["pwd"];
+
+    if (strcmp(productId, PRODUCT_ID) == 0 && strcmp(productPwd, PRODUCT_PWD) == 0) {
+      Serial.println("VProduct is valid!");
+      client.publish(AUTH_RESPONSE_TOPIC, "valid");
+    }
   }
 }
 
