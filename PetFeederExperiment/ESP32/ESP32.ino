@@ -188,17 +188,13 @@ void ConnectToWifi() {
       delay(500);
       Serial.print(".");
     }
-
-    Serial.println("WiFi connected: ");
-    Serial.print("SSID: ");
-    Serial.println(WiFi.SSID());
-    Serial.print("IP address: ");
-    Serial.println(WiFi.localIP());
+    Serial.println("WiFi successfully connected");
+    
   } else { // SMART WIFI CONFIG
     // No SSID and password stored in EEPROM, start SmartConfig
     Serial.println("SSID and Password not found. Starting SmartConfig...");
     WiFi.mode(WIFI_AP_STA);
-    WiFi.beginSmartConfig();
+    WiFi.beginSmartConfig(SC_TYPE_ESPTOUCH_V2); 
 
     // Wait for SmartConfig packet from mobile
     Serial.println("Waiting for SmartConfig.");
@@ -217,26 +213,19 @@ void ConnectToWifi() {
       Serial.print(".");
     }
     Serial.println("WiFi connected: ");
-    Serial.print("SSID: ");
-    Serial.println(WiFi.SSID());
-    Serial.print("IP address: ");
-    Serial.println(WiFi.localIP());
  
     String receivedSsid = WiFi.SSID();
     String receivedPass = WiFi.psk();
-    Serial.println(receivedSsid);
-    Serial.println(receivedPass);
+
     // Store SSID
     Serial.println("Writing ssid to EEPROM...");
     for (int i = 0; i < receivedSsid.length(); i++) {
        EEPROM.write(i, receivedSsid[i]);
-       Serial.print("Wrote: ");
        Serial.println(receivedSsid[i]);
     }
-    Serial.println("Writing ssid to EEPROM...");
+    Serial.println("Writing psk to EEPROM...");
     for (int i = 0; i < receivedPass.length(); i++) {
        EEPROM.write(i + 32, receivedPass[i]);
-       Serial.print("Wrote: ");
        Serial.println(receivedPass[i]);
     }
     EEPROM.commit();
