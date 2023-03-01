@@ -1,7 +1,7 @@
 // The esp32-cam has to send in data to the arduino
 // The esp32-cam needs to be powered via usb
 // Include wifi and time library to get the time via NTP
-
+#include <EEPROM.h>
 #include <WiFi.h>
 #include "time.h"
 #include <HardwareSerial.h>
@@ -10,6 +10,7 @@
 #include "esp_camera.h"
 #include "secrets.h"
 #include "ArduinoJson.h"
+
 
 // Default camera pin definitions (Taken from ESP32CameraWebserver code)
 #define PWDN_GPIO_NUM     32
@@ -40,9 +41,13 @@ PubSubClient client(esp32cam);
 
 // Necessary variables
 bool streamToggled = false;
+// Declare necessary variables
 
 void setup(){ // TODO: EEPROM for wifi and ssid, also connection to database...
   Serial.begin(115200);
+  pinMode(RESETBTN_PIN, INPUT); // Use GPIO2 of ESP32-Cam which will act as reset button
+  EEPROM.begin(96);
+
   //sendToArduino.begin(9600, SERIAL_8N1, 2, 3);
   // Initialize Camera first
   //CameraInit();
@@ -52,8 +57,10 @@ void setup(){ // TODO: EEPROM for wifi and ssid, also connection to database...
   //ValidateProduct(); // This will only be called once (for setting up via application)
   // Init NTP
   configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
-  // Connect to MQTT
-  ConnectToMQTT();
+  if (WiFi.status() == WL_CONNECTED) {
+    // Connect to MQTT
+    ConnectToMQTT();
+  }
 }
 
 void ConnectToMQTT() {
@@ -67,9 +74,9 @@ void ConnectToMQTT() {
     if (client.connect(PRODUCT_ID, MQTTusername, MQTTpassword)) {
       Serial.println("Connected to MQTT broker"); 
     } else {
-      Serial.print("Failed to connect to MQTT broker");
-      Serial.println(client.state());
-      delay(5000); 
+      Serial.print("Failed to connect to MQTT broker, restarting device");
+      delay(2000);
+      ESP.restart();
     } 
   }
   // Subscribe to the given topics
@@ -77,6 +84,7 @@ void ConnectToMQTT() {
   client.subscribe(TOGGLE_STREAM_TOPIC, 1);
   client.subscribe(TOGGLE_UVLIGHT_TOPIC, 1);
   client.subscribe(AUTH_TOPIC, 1);
+  return;
 }
 
 void CameraInit() {
@@ -140,41 +148,103 @@ void getImage() {
 
 
 void ConnectToWifi() {
-  // Init WiFi as Station, start SmartConfig
-  WiFi.mode(WIFI_AP_STA);
-  WiFi.beginSmartConfig();
-
-  //Wait for SmartConfig packet from mobile
-  Serial.println("Waiting for SmartConfig.");
-  while (!WiFi.smartConfigDone()) {
-    delay(500);
-    Serial.print(".");
+  String ssid;
+  String pwd = "";
+  Serial.println("Reading SSID");
+  for (int i = 0; i < 32; i++) { // Read ssid
+    //ssid += char(EEPROM.read(i));
+    char c = EEPROM.read(i);
+    if (c == 0) {
+      break; // End of string
+    }
+    ssid += c;
   }
-
-  Serial.println("");
-  Serial.println("SmartConfig received.");
-
-  //Wait for WiFi to connect to AP
-  Serial.println("Waiting for WiFi");
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
+  Serial.println("SSID: ");
+  Serial.print(ssid);
+  Serial.println("Reading PWD");
+  for (int i = 32; i < 96; i++) {
+    //pwd += char(EEPROM.read(i));
+    char c = EEPROM.read(i);
+    if (c == 0) {
+      break; // End of string
+    }
+    pwd += c;
   }
+  Serial.print("PWD: ");
+  Serial.println(pwd);
+  
+  // MANUAL WIFI SETUP (If there is some password)
+  if (!ssid.isEmpty() && !pwd.isEmpty()) { 
+    WiFi.mode(WIFI_STA);
+    WiFi.begin(ssid.c_str(), pwd.c_str());
+    Serial.print("Connecting to WiFi using SSID: ");
+    Serial.print(ssid);
+    Serial.print(" and password: ");
+    Serial.println(pwd);
+    
+    // Wait for WiFi to connect to AP
+    Serial.println("Waiting for WiFi");
+    while (WiFi.status() != WL_CONNECTED) {
+      delay(500);
+      Serial.print(".");
+    }
 
-  Serial.println("WiFi connected: ");
-  Serial.print(WiFi.localIP());
-  /* 
-  // MANUAL WIFI SETUP
-  WiFi.begin(ssid, pwd);
+    Serial.println("WiFi connected: ");
+    Serial.print("SSID: ");
+    Serial.println(WiFi.SSID());
+    Serial.print("IP address: ");
+    Serial.println(WiFi.localIP());
+  } else { // SMART WIFI CONFIG
+    // No SSID and password stored in EEPROM, start SmartConfig
+    Serial.println("SSID and Password not found. Starting SmartConfig...");
+    WiFi.mode(WIFI_AP_STA);
+    WiFi.beginSmartConfig();
 
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
+    // Wait for SmartConfig packet from mobile
+    Serial.println("Waiting for SmartConfig.");
+    while (!WiFi.smartConfigDone()) {
+      delay(500);
+      Serial.print(".");
+    }
+
+    Serial.println("");
+    Serial.println("SmartConfig received.");
+
+    // Wait for WiFi to connect to AP
+    Serial.println("Waiting for WiFi");
+    while (WiFi.status() != WL_CONNECTED) {
+      delay(500);
+      Serial.print(".");
+    }
+    Serial.println("WiFi connected: ");
+    Serial.print("SSID: ");
+    Serial.println(WiFi.SSID());
+    Serial.print("IP address: ");
+    Serial.println(WiFi.localIP());
+ 
+    String receivedSsid = WiFi.SSID();
+    String receivedPass = WiFi.psk();
+    Serial.println(receivedSsid);
+    Serial.println(receivedPass);
+    // Store SSID
+    Serial.println("Writing ssid to EEPROM...");
+    for (int i = 0; i < receivedSsid.length(); i++) {
+       EEPROM.write(i, receivedSsid[i]);
+       Serial.print("Wrote: ");
+       Serial.println(receivedSsid[i]);
+    }
+    Serial.println("Writing ssid to EEPROM...");
+    for (int i = 0; i < receivedPass.length(); i++) {
+       EEPROM.write(i + 32, receivedPass[i]);
+       Serial.print("Wrote: ");
+       Serial.println(receivedPass[i]);
+    }
+    EEPROM.commit();
+    // Reset the device (this is important for MQTT to work idk why)
+    Serial.println("Restarting device after smart config");
+    ESP.restart();
   }
-
-  Serial.println("");
-  Serial.println("WiFi connected");
-  */
+  return;
 }
 
 void messageReceived(char* topic, byte* payload, unsigned int length) {
@@ -202,8 +272,8 @@ void messageReceived(char* topic, byte* payload, unsigned int length) {
       }
   } else if (strcmp(topic, AUTH_TOPIC) == 0) {
     StaticJsonDocument<32> doc;
-    DeserializationError error = deserializeJson(doc, message);
-
+    DeserializationError error = deserializeJson(doc, message, length);
+    //Serial.println(message);
     // Check for parsing errors
     if (error) {
       Serial.print(F("deserializeJson() failed: "));
@@ -216,10 +286,13 @@ void messageReceived(char* topic, byte* payload, unsigned int length) {
     const char* productPwd = doc["pwd"];
 
     if (strcmp(productId, PRODUCT_ID) == 0 && strcmp(productPwd, PRODUCT_PWD) == 0) {
-      Serial.println("VProduct is valid!");
+      Serial.println("Product is valid!");
       client.publish(AUTH_RESPONSE_TOPIC, "valid");
+    } else {
+      Serial.println("Product is invalid!");
     }
-  }
+  } 
+  return;
 }
 
 
@@ -243,13 +316,19 @@ void loop(){
   
    }
   */
+  // RESET DEVICE HANDLER
+   if (digitalRead(RESETBTN_PIN) == HIGH) { // If the button is pressed
+    Serial.println("Erasing EEPROM...");
+    for (int i = 0; i < 96; i++) { // Erase EEPROM by writing 0 to each byte
+      EEPROM.write(i, 0);
+    }
+    EEPROM.commit(); // Save changes to EEPROM
+    Serial.println("EEPROM erased... Restarting device in 5s");
+    delay(5000); // Wait for 1 second to avoid multiple erasures
+    ESP.restart();
+  }
   client.loop();
   if (streamToggled == true && client.connected() == true) {
     getImage();
   }
-  /*
-  if (client.connected() == true) {
-    getImage();
-  }
-  */
 }
