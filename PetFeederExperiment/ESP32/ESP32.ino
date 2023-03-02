@@ -48,15 +48,14 @@ void setup(){ // TODO: EEPROM for wifi and ssid, also connection to database...
   pinMode(RESETBTN_PIN, INPUT); // Use GPIO2 of ESP32-Cam which will act as reset button
   EEPROM.begin(96);
 
-  //sendToArduino.begin(9600, SERIAL_8N1, 2, 3);
+  sendToArduino.begin(9600, SERIAL_8N1, 2, 3);
   // Initialize Camera first
-  //CameraInit();
+  CameraInit();
   //delay(2000); // Add some delay just in case...
   // Init Wifi
   ConnectToWifi();
-  //ValidateProduct(); // This will only be called once (for setting up via application)
   // Init NTP
-  configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
+  //configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
   if (WiFi.status() == WL_CONNECTED) {
     // Connect to MQTT
     ConnectToMQTT();
@@ -82,7 +81,7 @@ void ConnectToMQTT() {
   // Subscribe to the given topics
   client.subscribe(FEED_DURATION_TOPIC, 1);
   client.subscribe(TOGGLE_STREAM_TOPIC, 1);
-  client.subscribe(TOGGLE_UVLIGHT_TOPIC, 1);
+  client.subscribe(UVLIGHT_DURATION_TOPIC, 1);
   client.subscribe(AUTH_TOPIC, 1);
   return;
 }
@@ -248,9 +247,16 @@ void messageReceived(char* topic, byte* payload, unsigned int length) {
   
   if (strcmp(topic, FEED_DURATION_TOPIC) == 0) {
       int duration = atoi(message);
-      sendToArduino.print(duration);
+      // 's' will be the identifier for the arduino to know that it's a servo motor command
+      sendToArduino.print('s' + String(duration)); 
       // Publish something to inform client that action is successful
       client.publish(FEED_DURATION_RESPONSE_TOPIC, "true");
+  } else if (strcmp(topic, UVLIGHT_DURATION_TOPIC) == 0) {
+      int duration = atoi(message);
+      // 'u' will be the identifier for the arduino to know that it's a uv light command
+      sendToArduino.print('u' + String(duration)); 
+      // Publish something to inform client that action is successful
+      client.publish(UVLIGHT_DURATION_RESPONSE_TOPIC, "true");
   } else if (strcmp(topic, TOGGLE_STREAM_TOPIC) == 0) {
       Serial.print(message);
       // On and Off
@@ -308,6 +314,7 @@ void loop(){
   // RESET DEVICE HANDLER
    if (digitalRead(RESETBTN_PIN) == HIGH) { // If the button is pressed
     Serial.println("Erasing EEPROM...");
+    delay(1000);
     for (int i = 0; i < 96; i++) { // Erase EEPROM by writing 0 to each byte
       EEPROM.write(i, 0);
     }
