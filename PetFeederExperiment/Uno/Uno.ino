@@ -11,8 +11,8 @@ void setup() {
   // We use the PWM pin 3 for the servo motor
   dispenser.attach(DISPENSER_PIN);
   // Use pin 4 for the uv light (relay)
-  pinMode(DISPENSER_PIN, OUTPUT);
-  
+  pinMode(UVLIGHT_PIN, OUTPUT);
+          
   dispenser.write(0); // Reset servo first
   Serial.print("Resetted servo to 0 degrees");
 
@@ -27,7 +27,7 @@ void loop() {
         if (commandIdentifier == 's') { // Means we move the servo motor
           Serial.println("Moving the servo motor");
           moveServoMotor(duration);
-        } else if (commandIdentifier == 'u') {
+        } else if (commandIdentifier == 'u') { // Means we toggle the uv light
           Serial.println("Toggling the UV Light");
           toggleUVLight(duration);
         } 
