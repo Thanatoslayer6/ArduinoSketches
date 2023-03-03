@@ -11,7 +11,6 @@
 #include "secrets.h"
 #include "ArduinoJson.h"
 
-
 // Default camera pin definitions (Taken from ESP32CameraWebserver code)
 #define PWDN_GPIO_NUM     32
 #define RESET_GPIO_NUM    -1
@@ -41,6 +40,7 @@ PubSubClient client(esp32cam);
 
 // Necessary variables
 bool streamToggled = false;
+//bool resetButtonState = LOW;
 // Declare necessary variables
 
 void setup(){ // TODO: EEPROM for wifi and ssid, also connection to database...
@@ -60,6 +60,7 @@ void setup(){ // TODO: EEPROM for wifi and ssid, also connection to database...
     // Connect to MQTT
     ConnectToMQTT();
   }
+
 }
 
 void ConnectToMQTT() {
@@ -149,7 +150,7 @@ void getImage() {
 void ConnectToWifi() {
   String ssid;
   String pwd = "";
-  Serial.println("Reading SSID");
+  Serial.println("Reading SSID -> ");
   for (int i = 0; i < 32; i++) { // Read ssid
     //ssid += char(EEPROM.read(i));
     char c = EEPROM.read(i);
@@ -158,9 +159,9 @@ void ConnectToWifi() {
     }
     ssid += c;
   }
-  Serial.println("SSID: ");
+  Serial.print("SSID: ");
   Serial.print(ssid);
-  Serial.println("Reading PWD");
+  Serial.println("Reading PSK ->");
   for (int i = 32; i < 96; i++) {
     //pwd += char(EEPROM.read(i));
     char c = EEPROM.read(i);
@@ -169,8 +170,8 @@ void ConnectToWifi() {
     }
     pwd += c;
   }
-  Serial.print("PWD: ");
-  Serial.println(pwd);
+  Serial.print("PSK: ");
+  Serial.print(pwd);
   
   // MANUAL WIFI SETUP (If there is some password)
   if (!ssid.isEmpty() && !pwd.isEmpty()) { 
@@ -217,15 +218,15 @@ void ConnectToWifi() {
     String receivedPass = WiFi.psk();
 
     // Store SSID
-    Serial.println("Writing ssid to EEPROM...");
+    Serial.println("Writing ssid to EEPROM... -> ");
     for (int i = 0; i < receivedSsid.length(); i++) {
        EEPROM.write(i, receivedSsid[i]);
-       Serial.println(receivedSsid[i]);
+       Serial.print(receivedSsid[i]);
     }
-    Serial.println("Writing psk to EEPROM...");
+    Serial.println("Writing psk to EEPROM... -> ");
     for (int i = 0; i < receivedPass.length(); i++) {
        EEPROM.write(i + 32, receivedPass[i]);
-       Serial.println(receivedPass[i]);
+       Serial.print(receivedPass[i]);
     }
     EEPROM.commit();
     // Reset the device (this is important for MQTT to work idk why)
@@ -291,6 +292,17 @@ void messageReceived(char* topic, byte* payload, unsigned int length) {
 }
 
 
+bool debounceButton() {
+  bool stateNow = digitalRead(RESETBTN_PIN);
+  if (stateNow != LOW) {
+    delay(100);
+    stateNow = digitalRead(RESETBTN_PIN);
+  } else {
+    delay(100);
+  }
+  return stateNow;
+}
+
 void loop(){
   /*
   time_t now = time(nullptr); // Get current time
@@ -312,7 +324,8 @@ void loop(){
    }
   */
   // RESET DEVICE HANDLER
-   if (digitalRead(RESETBTN_PIN) == HIGH) { // If the button is pressed
+  /*
+  if (digitalRead(RESETBTN_PIN) == HIGH) { // If the button is pressed
     Serial.println("Erasing EEPROM...");
     delay(1000);
     for (int i = 0; i < 96; i++) { // Erase EEPROM by writing 0 to each byte
@@ -320,9 +333,25 @@ void loop(){
     }
     EEPROM.commit(); // Save changes to EEPROM
     Serial.println("EEPROM erased... Restarting device in 5s");
-    delay(5000); // Wait for 1 second to avoid multiple erasures
+    delay(5000); // Wait for 5 seconds to avoid multiple erasures
     ESP.restart();
   }
+  */
+  
+  if (debounceButton() == HIGH) {
+    //resetButtonState = HIGH;
+    Serial.println("Erasing EEPROM...");
+    delay(1000);
+    for (int i = 0; i < 96; i++) { // Erase EEPROM by writing 0 to each byte
+      EEPROM.write(i, 0);
+    }
+    EEPROM.commit(); // Save changes to EEPROM
+    Serial.println("EEPROM erased... Restarting device in 5s");
+    delay(5000); // Wait for 5 seconds to avoid multiple erasures
+    ESP.restart();
+  }
+  //resetButtonState = LOW;
+  
   client.loop();
   if (streamToggled == true && client.connected() == true) {
     getImage();
