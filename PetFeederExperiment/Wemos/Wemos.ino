@@ -16,10 +16,47 @@ void setup() {
   dispenser.write(0); // Reset servo first
   Serial.print("Resetted servo to 0 degrees");
 
+  // WIFI SETUP (wait for serial communication)
+  wifiConfiguration();
+
 }
 
+void WifiConfiguration() {
+  char ssid[32], password[64];
+  int index = 0;
+  while (Serial.available()) { // Get ssid
+    char c = Serial.read();
+    if (c == '\n' || index >= 31) { // From 0 - 31 (32 chars)
+      ssid[index] = '\0';
+      break;
+    }
+    ssid[index++] = c;
+  }
+  index = 0;
+  while (Serial.available()) { // Get password
+    char c = Serial.read();
+    if (c == '\n' || index >= 63) {
+      password[index] = '\0';
+      break;
+    }
+    password[index++] = c;
+  }
+
+  // Start connecting to wifi as soon as possible...
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(1000);
+    Serial.println("Connecting to WiFi...");
+  }
+  Serial.println("Connected to WiFi");
+}
+
+
 void loop() {
-  
+  // TODO: MQTT Handling (Microphone/Audio, UV-Light)
+  // ESP32 -> Camera, and Servo motor scheduling....
+  // WEMOS D1 -> Audio and UV-Light
+  /*
     while (Serial.available()) {
         char commandIdentifier = Serial.read(); // Get the first character
         int duration = Serial.parseInt();
@@ -33,7 +70,7 @@ void loop() {
           toggleUVLight(duration);
         } 
     }  
-    
+  */
 }
 
 // Pass number of seconds in milliseconds
