@@ -87,14 +87,13 @@ void loop() {
   // ESP32 -> Camera, and Servo motor scheduling....
   // WEMOS D1 -> Audio and UV-Light
   while(Serial.available()) {
-    // wifi credentials format are "SSID;PSK"
+    /*
     if (isConnectedToInternet == false) {
       String credentials = Serial.readString();
       int delimiterIndex = credentials.indexOf(';');
       ssid = credentials.substring(0, delimiterIndex);
       password = credentials.substring(delimiterIndex + 1);
       WifiConfiguration();
-      /*
       if (hasSSID == false) {
         ssid = Serial.readString();
       }
@@ -106,8 +105,8 @@ void loop() {
         WifiConfiguration();  
       }
       hasSSID = true;
-      */
     }
+    */
   }
   
   /*
