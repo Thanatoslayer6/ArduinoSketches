@@ -6,9 +6,16 @@
 Servo dispenser;
 #define UVLIGHT_PIN D4
 #define DISPENSER_PIN D3
+bool hasSSID = false;
+bool hasPassword = false;
+bool isConnectedToInternet = false;
+String ssid, password;
+//char ssid[32], password[64];
+//int msgIndex = 0;
 
 void setup() {
   Serial.begin(9600);
+  
   // We use the PWM pin 3 for the servo motor
   dispenser.attach(DISPENSER_PIN);
   // Use pin 4 for the uv light (relay)
@@ -18,52 +25,60 @@ void setup() {
   Serial.print("Resetted servo to 0 degrees");
 
   // WIFI SETUP (wait for serial communication)
-  WifiConfiguration();    
+  //WifiConfiguration();    
 
 }
 
 void WifiConfiguration() {
-  char ssid[32], password[64];
-  int index = 0;
-  bool hasSSID = false, hasPassword = false;
-  while (hasSSID == false && hasPassword == false) {
-    while (hasSSID == false) {
-      while (Serial.available()) { // Get ssid
-        char c = Serial.read();
-        if (c == '\n' || index >= 31) { // From 0 - 31 (32 chars)
-          ssid[index] = '\0';
-          hasSSID = true;
-          break;
-        }
-        ssid[index++] = c;
+
+  /*
+  while (hasSSID == false) {
+    while (Serial.available()) { // Get ssid
+      ssid = Serial.readStringUntil('\n');
+      hasSSID = true;
+      
+      char c = Serial.read();
+      if (c == '\n' || index >= 31) { // From 0 - 31 (32 chars)
+        ssid[index] = '\0';
+        hasSSID = true;
+        break;
       }
-    }
-    index = 0;
-    while (hasPassword == false) {
-      while (Serial.available()) { // Get password
-        char c = Serial.read();
-        if (c == '\n' || index >= 63) {
-          password[index] = '\0';
-          hasPassword = true;
-          break;
-        }
-        password[index++] = c;
-      }
+      ssid[index] = c;
+      index++;
+      
     }
   }
-
+  Serial.println(ssid);
+  //index = 0;
+  while (hasPassword == false) {
+    while (Serial.available()) { // Get password
+      password = Serial.readStringUntil('\n');
+      hasPassword = true;
+      //char c = Serial.read();
+      
+      if (c == '\n' || index >= 63) {
+        password[index] = '\0';
+        hasPassword = true;
+        break;
+      }
+      password[index] = c;
+      index++;
+      
+    }
+  }
+  */
   // Start connecting to wifi as soon as possible...
   Serial.println("Acquired Wifi ssid: ");
   Serial.print(ssid);
   Serial.println("Acquired Wifi password: ");
   Serial.print(password);
-  WiFi.begin(ssid, password);
+  WiFi.begin(ssid.c_str(), password.c_str());
   while (WiFi.status() != WL_CONNECTED) {
     delay(1000);
     Serial.println("Connecting to WiFi...");
   }
   Serial.println("Connected to WiFi");
-  isConnectedToTheInternet = true;
+  isConnectedToInternet = true;
 }
 
 
@@ -71,6 +86,30 @@ void loop() {
   // TODO: MQTT Handling (Microphone/Audio, UV-Light)
   // ESP32 -> Camera, and Servo motor scheduling....
   // WEMOS D1 -> Audio and UV-Light
+  while(Serial.available()) {
+    // wifi credentials format are "SSID;PSK"
+    if (isConnectedToInternet == false) {
+      String credentials = Serial.readString();
+      int delimiterIndex = credentials.indexOf(';');
+      ssid = credentials.substring(0, delimiterIndex);
+      password = credentials.substring(delimiterIndex + 1);
+      WifiConfiguration();
+      /*
+      if (hasSSID == false) {
+        ssid = Serial.readString();
+      }
+      if (hasSSID == true && hasPassword == false) {
+        password = Serial.readString();
+        hasPassword = true; 
+      }
+      if (hasSSID == true && hasPassword == true) {
+        WifiConfiguration();  
+      }
+      hasSSID = true;
+      */
+    }
+  }
+  
   /*
     while (Serial.available()) {
         char commandIdentifier = Serial.read(); // Get the first character

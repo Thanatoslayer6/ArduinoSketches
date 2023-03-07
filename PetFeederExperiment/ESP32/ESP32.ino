@@ -187,8 +187,12 @@ void ConnectToWifi() {
       Serial.print(".");
     }
     Serial.println("WiFi successfully connected");
-    sendToArduino.println(ssid);
-    sendToArduino.println(pwd);
+    //sendToArduino.println(ssid);
+    //delay(2000);
+    //sendToArduino.println(pwd);
+    sendToArduino.print(ssid + ";" + pwd);
+    //delay(500);
+    //sendToArduino.print(pwd);
     
   } else { // SMART WIFI CONFIG
     // No SSID and password stored in EEPROM, start SmartConfig
