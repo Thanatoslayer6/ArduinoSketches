@@ -1,6 +1,7 @@
 // The arduino recieves from the esp32-cam
 // We include the servo library
 #include <Servo.h>
+#include <ESP8266WiFi.h>
 
 Servo dispenser;
 #define UVLIGHT_PIN D4
@@ -17,38 +18,52 @@ void setup() {
   Serial.print("Resetted servo to 0 degrees");
 
   // WIFI SETUP (wait for serial communication)
-  wifiConfiguration();
+  WifiConfiguration();    
 
 }
 
 void WifiConfiguration() {
   char ssid[32], password[64];
   int index = 0;
-  while (Serial.available()) { // Get ssid
-    char c = Serial.read();
-    if (c == '\n' || index >= 31) { // From 0 - 31 (32 chars)
-      ssid[index] = '\0';
-      break;
+  bool hasSSID = false, hasPassword = false;
+  while (hasSSID == false && hasPassword == false) {
+    while (hasSSID == false) {
+      while (Serial.available()) { // Get ssid
+        char c = Serial.read();
+        if (c == '\n' || index >= 31) { // From 0 - 31 (32 chars)
+          ssid[index] = '\0';
+          hasSSID = true;
+          break;
+        }
+        ssid[index++] = c;
+      }
     }
-    ssid[index++] = c;
-  }
-  index = 0;
-  while (Serial.available()) { // Get password
-    char c = Serial.read();
-    if (c == '\n' || index >= 63) {
-      password[index] = '\0';
-      break;
+    index = 0;
+    while (hasPassword == false) {
+      while (Serial.available()) { // Get password
+        char c = Serial.read();
+        if (c == '\n' || index >= 63) {
+          password[index] = '\0';
+          hasPassword = true;
+          break;
+        }
+        password[index++] = c;
+      }
     }
-    password[index++] = c;
   }
 
   // Start connecting to wifi as soon as possible...
+  Serial.println("Acquired Wifi ssid: ");
+  Serial.print(ssid);
+  Serial.println("Acquired Wifi password: ");
+  Serial.print(password);
   WiFi.begin(ssid, password);
   while (WiFi.status() != WL_CONNECTED) {
     delay(1000);
     Serial.println("Connecting to WiFi...");
   }
   Serial.println("Connected to WiFi");
+  isConnectedToTheInternet = true;
 }
 
 

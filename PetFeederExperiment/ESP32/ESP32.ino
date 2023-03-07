@@ -40,8 +40,6 @@ PubSubClient client(esp32cam);
 
 // Necessary variables
 bool streamToggled = false;
-//bool resetButtonState = LOW;
-// Declare necessary variables
 
 void setup(){ // TODO: EEPROM for wifi and ssid, also connection to database...
   Serial.begin(115200);
@@ -189,6 +187,8 @@ void ConnectToWifi() {
       Serial.print(".");
     }
     Serial.println("WiFi successfully connected");
+    sendToArduino.println(ssid);
+    sendToArduino.println(pwd);
     
   } else { // SMART WIFI CONFIG
     // No SSID and password stored in EEPROM, start SmartConfig
