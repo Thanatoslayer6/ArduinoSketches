@@ -1,6 +1,6 @@
 #include <ESP8266WiFi.h>
 #include <EEPROM.h>
-#include "../secrets.h"
+#include "secrets.h"
 #define UVLIGHT_PIN D4
 // Necessary global variables
 bool hasConnected = false;

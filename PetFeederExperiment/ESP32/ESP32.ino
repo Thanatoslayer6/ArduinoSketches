@@ -4,8 +4,9 @@
 #include <HardwareSerial.h>
 #include <PubSubClient.h>
 #include <WiFiClientSecure.h>
+#include <ESP32Servo.h>
 #include "esp_camera.h"
-#include "../secrets.h"
+#include "secrets.h"
 #include "ArduinoJson.h"
 
 // Default camera pin definitions (Taken from ESP32CameraWebserver code)
@@ -38,14 +39,21 @@ Servo dispenser;
 
 // Necessary variables and definitions
 bool streamToggled = false;
+int currentScheduleIndex = 0;
 #define DISPENSER_PIN 14
 #define RESETBTN_PIN 2
 
+// Struct for storing schedule
+// 0 - 31 -> 32 bytes = SSID
+// 32 - 95 -> 64 bytes = PSK
+// 96 - 2047 -> 1952 bytes = Schedule
 struct TimeData {
-  int h;
-  int m;
-  int d;
-}
+  int h; // hour
+  int m; // minute
+  int d; // duration
+};
+
+TimeData feeding_schedules[10];
 
 void setup() { // TODO: EEPROM for wifi and ssid, also connection to database...
   Serial.begin(115200);
@@ -62,6 +70,33 @@ void setup() { // TODO: EEPROM for wifi and ssid, also connection to database...
   if (WiFi.status() == WL_CONNECTED) {
     // Connect to MQTT
     ConnectToMQTT();
+  }
+  // Get feeding schedule
+  readScheduleFromEEPROM();
+}
+
+void saveScheduleToEEPROM() {
+  // Set the flag
+  int eepromAddr = 96;
+  EEPROM.write(eepromAddr, 0xFF); // Set a flag or something...
+  eepromAddr++; // start writing data at 97
+  for (int i = 0; i < 10; i++) {
+    EEPROM.put(eepromAddr, feeding_schedules[i]);
+    eepromAddr += sizeof(TimeData);
+  }
+  EEPROM.commit();
+}
+
+void readScheduleFromEEPROM() {
+  int eepromAddr = 96;
+  if (EEPROM.read(eepromAddr) == 0xFF) {
+    eepromAddr++;
+    for (int i = 0; i < 10; i++) {
+      EEPROM.get(eepromAddr, feeding_schedules[i]);
+      eepromAddr += sizeof(TimeData);
+    }
+  } else {
+    Serial.println("There are no schedules set...");
   }
 }
 
@@ -97,7 +132,7 @@ void ConnectToMQTT() {
   while (!client.connected()) {
     Serial.println("Connecting to MQTT broker...");
     String clientName = PRODUCT_ID + String("-esp32");
-    if (client.connect(clientName, MQTTusername, MQTTpassword)) {
+    if (client.connect(clientName.c_str(), MQTTusername, MQTTpassword)) {
       Serial.println("Connected to MQTT broker");
     } else {
       Serial.print("Failed to connect to MQTT broker, restarting device");
@@ -154,7 +189,7 @@ void CameraInit() {
 
 void getImage() {
   camera_fb_t *fb = esp_camera_fb_get();
-  // Check if there's an image, it is a jpeg, and is less than 32kb
+  // Check if there's an image with jpeg format, and is less than 32kb
   if (fb != NULL && fb->format == PIXFORMAT_JPEG && fb->len < 32768) {
     Serial.print("Image Length: ");
     Serial.print(fb->len);
@@ -314,20 +349,30 @@ void messageReceived(char* topic, byte* payload, unsigned int length) {
       return;
     }
 
-    // First clear the time data within the eeprom
-    
+    // First clear the schedules from the eeprom 96-2047
+    Serial.println("Erasing schedules from the EEPROM");
+    for (int i = 96; i < 2048; i++) {
+      EEPROM.write(i, 0);
+    }
+    //EEPROM.commit(); // Save changes to EEPROM
+    Serial.println("Schedules are now erased... but not saved for now...");
+    // Schedules, in this case is only limited to 10
+    //TimeData schedule[10];
+    int i = 0;
     // Access the parsed data
     for (JsonObject item : doc.as<JsonArray>()) {
-      int h = item["h"]; // 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24
-      int m = item["m"]; // 60, 60, 60, 60, 60, 60, 60, 60, 60, 60, 60, 60, 60, 60, 60
-      int d = item["d"]; // 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, ...
+      feeding_schedules[i].h = item["h"]; // 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24
+      feeding_schedules[i].m = item["m"]; // 60, 60, 60, 60, 60, 60, 60, 60, 60, 60, 60, 60, 60, 60, 60
+      feeding_schedules[i].d = item["d"]; // 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, ...
+      i++;
+      if (i < 10) {
+        break;
+      }
     }
+
+    saveScheduleToEEPROM();
   }
   return;
-}
-
-void loadScheduleFromEEPROM() {
-  
 }
 
 void loop() {
@@ -335,9 +380,9 @@ void loop() {
   struct tm* timeinfo = localtime(&now); // Convert to local time
 
   // If we want the function to only execute once, then we actually check for the exact time! (include seconds) in comparison
-  if (timeinfo->tm_hour == targetHour && timeinfo->tm_min == targetMinute && timeinfo->tm_sec == 0) { // Check if minute is divisible by 5
+  if (timeinfo->tm_hour == feeding_schedules[currentScheduleIndex].h && timeinfo->tm_min == feeding_schedules[currentScheduleIndex].m && timeinfo->tm_sec == 0) { // Check if minute is divisible by 5
     //Serial.println("Sending duration for dispenser coming from ESP32");
-    moveServoMotor();
+    moveServoMotor(feeding_schedules[currentScheduleIndex].d);
     //sendToArduino.print(6);
     delay(1200); // Just wait for 1.2 seconds to be safe
   }
