@@ -1,6 +1,3 @@
-// The esp32-cam has to send in data to the arduino
-// The esp32-cam needs to be powered via usb
-// Include wifi and time library to get the time via NTP
 #include <EEPROM.h>
 #include <WiFi.h>
 #include "time.h"
@@ -8,7 +5,7 @@
 #include <PubSubClient.h>
 #include <WiFiClientSecure.h>
 #include "esp_camera.h"
-#include "secrets.h"
+#include "../secrets.h"
 #include "ArduinoJson.h"
 
 // Default camera pin definitions (Taken from ESP32CameraWebserver code)
@@ -35,31 +32,61 @@ HardwareSerial sendToArduino(1);
 
 // Create secure wifi client
 WiFiClientSecure esp32cam;
-// Create mqtt client 
+// Create mqtt client
 PubSubClient client(esp32cam);
+Servo dispenser;
 
-// Necessary variables
+// Necessary variables and definitions
 bool streamToggled = false;
+#define DISPENSER_PIN 14
+#define RESETBTN_PIN 2
 
-void setup(){ // TODO: EEPROM for wifi and ssid, also connection to database...
+struct TimeData {
+  int h;
+  int m;
+  int d;
+}
+
+void setup() { // TODO: EEPROM for wifi and ssid, also connection to database...
   Serial.begin(115200);
   pinMode(RESETBTN_PIN, INPUT); // Use GPIO2 of ESP32-Cam which will act as reset button
-  EEPROM.begin(96);
+  EEPROM.begin(2048); // Use about 2KB of EEPROM
 
   sendToArduino.begin(9600, SERIAL_8N1, 2, 3);
   // Initialize Camera first
   CameraInit();
-  //delay(2000); // Add some delay just in case...
-  // Init Wifi
+
   ConnectToWifi();
   // Init NTP
-  //configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
+  configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
   if (WiFi.status() == WL_CONNECTED) {
     // Connect to MQTT
     ConnectToMQTT();
   }
-
 }
+
+bool debounceButton() {
+  bool stateNow = digitalRead(RESETBTN_PIN);
+  if (stateNow != LOW) {
+    delay(100);
+    stateNow = digitalRead(RESETBTN_PIN);
+  } else {
+    delay(100);
+  }
+  return stateNow;
+}
+
+// Pass number of seconds in milliseconds
+void moveServoMotor(uint16_t duration) {
+  Serial.print("Moved servo motor by 90 degrees for ");
+  Serial.print(duration);
+  Serial.print(" milliseconds");
+  Serial.println();
+  dispenser.write(90); // Turn 90 degrees
+  delay(duration);
+  dispenser.write(0);
+}
+
 
 void ConnectToMQTT() {
   // First set root certificate
@@ -69,19 +96,20 @@ void ConnectToMQTT() {
   client.setCallback(messageReceived);
   while (!client.connected()) {
     Serial.println("Connecting to MQTT broker...");
-    if (client.connect(PRODUCT_ID, MQTTusername, MQTTpassword)) {
-      Serial.println("Connected to MQTT broker"); 
+    String clientName = PRODUCT_ID + String("-esp32");
+    if (client.connect(clientName, MQTTusername, MQTTpassword)) {
+      Serial.println("Connected to MQTT broker");
     } else {
       Serial.print("Failed to connect to MQTT broker, restarting device");
       delay(2000);
       ESP.restart();
-    } 
+    }
   }
   // Subscribe to the given topics
   client.subscribe(FEED_DURATION_TOPIC, 1);
   client.subscribe(TOGGLE_STREAM_TOPIC, 1);
-  client.subscribe(UVLIGHT_DURATION_TOPIC, 1);
-  client.subscribe(AUTH_TOPIC, 1);
+  //client.subscribe(UVLIGHT_DURATION_TOPIC, 1);
+  //client.subscribe(AUTH_TOPIC, 1);
   return;
 }
 
@@ -133,7 +161,7 @@ void getImage() {
     Serial.println();
     bool result = client.publish(STREAM_TOPIC, fb->buf, fb->len);
     Serial.println(result);
-    
+
     if (!result) {
       ESP.restart();
     }
@@ -142,8 +170,6 @@ void getImage() {
   esp_camera_fb_return(fb);
   delay(50); // Miniscule duration for the esp32 to gain strength
 }
-
-
 
 void ConnectToWifi() {
   String ssid;
@@ -170,16 +196,16 @@ void ConnectToWifi() {
   }
   Serial.print("PSK: ");
   Serial.print(pwd);
-  
+
   // MANUAL WIFI SETUP (If there is some password)
-  if (!ssid.isEmpty() && !pwd.isEmpty()) { 
+  if (!ssid.isEmpty() && !pwd.isEmpty()) {
     WiFi.mode(WIFI_STA);
     WiFi.begin(ssid.c_str(), pwd.c_str());
     Serial.print("Connecting to WiFi using SSID: ");
     Serial.print(ssid);
     Serial.print(" and password: ");
     Serial.println(pwd);
-    
+
     // Wait for WiFi to connect to AP
     Serial.println("Waiting for WiFi");
     while (WiFi.status() != WL_CONNECTED) {
@@ -187,18 +213,14 @@ void ConnectToWifi() {
       Serial.print(".");
     }
     Serial.println("WiFi successfully connected");
-    //sendToArduino.println(ssid);
-    //delay(2000);
-    //sendToArduino.println(pwd);
+    // Send in ssid and password to the other microcontroller via Serial communication
     sendToArduino.print(ssid + ";" + pwd);
-    //delay(500);
-    //sendToArduino.print(pwd);
-    
+
   } else { // SMART WIFI CONFIG
     // No SSID and password stored in EEPROM, start SmartConfig
     Serial.println("SSID and Password not found. Starting SmartConfig...");
     WiFi.mode(WIFI_AP_STA);
-    WiFi.beginSmartConfig(SC_TYPE_ESPTOUCH_V2); 
+    WiFi.beginSmartConfig(SC_TYPE_ESPTOUCH_V2);
 
     // Wait for SmartConfig packet from mobile
     Serial.println("Waiting for SmartConfig.");
@@ -217,20 +239,20 @@ void ConnectToWifi() {
       Serial.print(".");
     }
     Serial.println("WiFi connected: ");
- 
+
     String receivedSsid = WiFi.SSID();
     String receivedPass = WiFi.psk();
 
     // Store SSID
     Serial.println("Writing ssid to EEPROM... -> ");
     for (int i = 0; i < receivedSsid.length(); i++) {
-       EEPROM.write(i, receivedSsid[i]);
-       Serial.print(receivedSsid[i]);
+      EEPROM.write(i, receivedSsid[i]);
+      Serial.print(receivedSsid[i]);
     }
     Serial.println("Writing psk to EEPROM... -> ");
     for (int i = 0; i < receivedPass.length(); i++) {
-       EEPROM.write(i + 32, receivedPass[i]);
-       Serial.print(receivedPass[i]);
+      EEPROM.write(i + 32, receivedPass[i]);
+      Serial.print(receivedPass[i]);
     }
     EEPROM.commit();
     // Reset the device (this is important for MQTT to work idk why)
@@ -249,31 +271,23 @@ void messageReceived(char* topic, byte* payload, unsigned int length) {
   memcpy(message, payload, length);
   message[length] = '\0';
   // ~~~~~~~~~~~ End
-  
+
   if (strcmp(topic, FEED_DURATION_TOPIC) == 0) {
-      int duration = atoi(message);
-      // 's' will be the identifier for the arduino to know that it's a servo motor command
-      sendToArduino.print('s' + String(duration)); 
-      // Publish something to inform client that action is successful
-      client.publish(FEED_DURATION_RESPONSE_TOPIC, "true");
-  } else if (strcmp(topic, UVLIGHT_DURATION_TOPIC) == 0) {
-      int duration = atoi(message);
-      // 'u' will be the identifier for the arduino to know that it's a uv light command
-      sendToArduino.print('u' + String(duration)); 
-      // Publish something to inform client that action is successful
-      client.publish(UVLIGHT_DURATION_RESPONSE_TOPIC, "true");
+    int duration = atoi(message);
+    moveServoMotor(duration);
+    // Publish something to inform client that action is successful
+    client.publish(FEED_DURATION_RESPONSE_TOPIC, "true");
   } else if (strcmp(topic, TOGGLE_STREAM_TOPIC) == 0) {
-      Serial.print(message);
-      // On and Off
-      if (String(message) == "on") {
-        streamToggled = true;
-      } else if (String(message) == "off") {
-        streamToggled = false;
-      }
+    Serial.print(message);
+    // On and Off
+    if (String(message) == "on") {
+      streamToggled = true;
+    } else if (String(message) == "off") {
+      streamToggled = false;
+    }
   } else if (strcmp(topic, AUTH_TOPIC) == 0) {
     StaticJsonDocument<32> doc;
     DeserializationError error = deserializeJson(doc, message, length);
-    //Serial.println(message);
     // Check for parsing errors
     if (error) {
       Serial.print(F("deserializeJson() failed: "));
@@ -284,80 +298,66 @@ void messageReceived(char* topic, byte* payload, unsigned int length) {
     // Access the parsed data
     const char* productId = doc["id"];
     const char* productPwd = doc["pwd"];
-
     if (strcmp(productId, PRODUCT_ID) == 0 && strcmp(productPwd, PRODUCT_PWD) == 0) {
       Serial.println("Product is valid!");
       client.publish(AUTH_RESPONSE_TOPIC, "valid");
     } else {
       Serial.println("Product is invalid!");
     }
-  } 
+  } else if (strcmp(topic, FEED_SCHEDULE_TOPIC) == 0) {
+    StaticJsonDocument<1024> doc;
+    DeserializationError error = deserializeJson(doc, message, length);
+    // Check for parsing errors
+    if (error) {
+      Serial.print(F("deserializeJson() failed: "));
+      Serial.println(error.f_str());
+      return;
+    }
+
+    // First clear the time data within the eeprom
+    
+    // Access the parsed data
+    for (JsonObject item : doc.as<JsonArray>()) {
+      int h = item["h"]; // 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24
+      int m = item["m"]; // 60, 60, 60, 60, 60, 60, 60, 60, 60, 60, 60, 60, 60, 60, 60
+      int d = item["d"]; // 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, ...
+    }
+  }
   return;
 }
 
-
-bool debounceButton() {
-  bool stateNow = digitalRead(RESETBTN_PIN);
-  if (stateNow != LOW) {
-    delay(100);
-    stateNow = digitalRead(RESETBTN_PIN);
-  } else {
-    delay(100);
-  }
-  return stateNow;
+void loadScheduleFromEEPROM() {
+  
 }
 
-void loop(){
-  /*
+void loop() {
   time_t now = time(nullptr); // Get current time
   struct tm* timeinfo = localtime(&now); // Convert to local time
 
-  // If we want to like only execute once, then we actually check for the exact time! (include seconds) in comparison
-  
+  // If we want the function to only execute once, then we actually check for the exact time! (include seconds) in comparison
   if (timeinfo->tm_hour == targetHour && timeinfo->tm_min == targetMinute && timeinfo->tm_sec == 0) { // Check if minute is divisible by 5
-    Serial.println("Sending duration for dispenser coming from ESP32");
-    sendToArduino.print(6);
+    //Serial.println("Sending duration for dispenser coming from ESP32");
+    moveServoMotor();
+    //sendToArduino.print(6);
     delay(1200); // Just wait for 1.2 seconds to be safe
-   }
-  
-   if ((timeinfo->tm_min % 2 == 0) && timeinfo->tm_sec == 0) {
-    Serial.println("Sending duration for dispenser coming from ESP32");
-    sendToArduino.print(8000);
-    //delay(1200); // Just wait for 1.2 seconds to be safe
-  
-   }
-  */
-  // RESET DEVICE HANDLER
-  /*
-  if (digitalRead(RESETBTN_PIN) == HIGH) { // If the button is pressed
-    Serial.println("Erasing EEPROM...");
-    delay(1000);
-    for (int i = 0; i < 96; i++) { // Erase EEPROM by writing 0 to each byte
-      EEPROM.write(i, 0);
-    }
-    EEPROM.commit(); // Save changes to EEPROM
-    Serial.println("EEPROM erased... Restarting device in 5s");
-    delay(5000); // Wait for 5 seconds to avoid multiple erasures
-    ESP.restart();
   }
-  */
-  
+
+  // RESET DEVICE HANDLER
   if (debounceButton() == HIGH) {
     //resetButtonState = HIGH;
     Serial.println("Erasing EEPROM...");
     delay(1000);
-    for (int i = 0; i < 96; i++) { // Erase EEPROM by writing 0 to each byte
+    for (int i = 0; i < 2048; i++) { // Erase EEPROM by writing 0 to each byte
       EEPROM.write(i, 0);
     }
     EEPROM.commit(); // Save changes to EEPROM
-    Serial.println("EEPROM erased... Restarting device in 5s");
-    delay(5000); // Wait for 5 seconds to avoid multiple erasures
+    Serial.println("EEPROM erased... will reset other microcontroller...");
+    client.publish(RESET_WEMOS_TOPIC, "reset");
+    delay(3000); // Wait for 3 seconds to avoid multiple erasures
     ESP.restart();
   }
-  //resetButtonState = LOW;
-  
-  client.loop();
   if (streamToggled == true && client.connected() == true) {
     getImage();
   }
+  client.loop();
 }
