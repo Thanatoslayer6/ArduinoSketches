@@ -39,6 +39,7 @@ Servo dispenser;
 
 // Necessary variables and definitions
 bool streamToggled = false;
+bool isThereStoredSchedules = false;
 int currentScheduleIndex = 0;
 #define DISPENSER_PIN 14
 #define RESETBTN_PIN 2
@@ -61,6 +62,8 @@ void setup() { // TODO: EEPROM for wifi and ssid, also connection to database...
   EEPROM.begin(2048); // Use about 2KB of EEPROM
 
   sendToArduino.begin(9600, SERIAL_8N1, 2, 3);
+  // Get stored feeding schedules
+  readScheduleFromEEPROM();
   // Initialize Camera first
   CameraInit();
 
@@ -71,8 +74,6 @@ void setup() { // TODO: EEPROM for wifi and ssid, also connection to database...
     // Connect to MQTT
     ConnectToMQTT();
   }
-  // Get feeding schedule
-  readScheduleFromEEPROM();
 }
 
 void saveScheduleToEEPROM() {
@@ -85,11 +86,13 @@ void saveScheduleToEEPROM() {
     eepromAddr += sizeof(TimeData);
   }
   EEPROM.commit();
+  isThereStoredSchedules = true;
 }
 
 void readScheduleFromEEPROM() {
   int eepromAddr = 96;
   if (EEPROM.read(eepromAddr) == 0xFF) {
+    isThereStoredSchedules = true;
     eepromAddr++;
     for (int i = 0; i < 10; i++) {
       EEPROM.get(eepromAddr, feeding_schedules[i]);
@@ -141,10 +144,10 @@ void ConnectToMQTT() {
     }
   }
   // Subscribe to the given topics
+  client.subscribe(AUTH_TOPIC, 1);
   client.subscribe(FEED_DURATION_TOPIC, 1);
+  client.subscribe(FEED_SCHEDULE_TOPIC, 1);
   client.subscribe(TOGGLE_STREAM_TOPIC, 1);
-  //client.subscribe(UVLIGHT_DURATION_TOPIC, 1);
-  //client.subscribe(AUTH_TOPIC, 1);
   return;
 }
 
@@ -209,7 +212,7 @@ void getImage() {
 void ConnectToWifi() {
   String ssid;
   String pwd = "";
-  Serial.println("Reading SSID -> ");
+  //Serial.println("Reading SSID -> ");
   for (int i = 0; i < 32; i++) { // Read ssid
     //ssid += char(EEPROM.read(i));
     char c = EEPROM.read(i);
@@ -220,7 +223,7 @@ void ConnectToWifi() {
   }
   Serial.print("SSID: ");
   Serial.print(ssid);
-  Serial.println("Reading PSK ->");
+  //Serial.println("Reading PSK ->");
   for (int i = 32; i < 96; i++) {
     //pwd += char(EEPROM.read(i));
     char c = EEPROM.read(i);
@@ -279,15 +282,15 @@ void ConnectToWifi() {
     String receivedPass = WiFi.psk();
 
     // Store SSID
-    Serial.println("Writing ssid to EEPROM... -> ");
+    Serial.println("Writing ssid to EEPROM...");
     for (int i = 0; i < receivedSsid.length(); i++) {
       EEPROM.write(i, receivedSsid[i]);
-      Serial.print(receivedSsid[i]);
+      //Serial.print(receivedSsid[i]);
     }
-    Serial.println("Writing psk to EEPROM... -> ");
+    Serial.println("Writing psk to EEPROM...");
     for (int i = 0; i < receivedPass.length(); i++) {
       EEPROM.write(i + 32, receivedPass[i]);
-      Serial.print(receivedPass[i]);
+      //Serial.print(receivedPass[i]);
     }
     EEPROM.commit();
     // Reset the device (this is important for MQTT to work idk why)
@@ -380,11 +383,13 @@ void loop() {
   struct tm* timeinfo = localtime(&now); // Convert to local time
 
   // If we want the function to only execute once, then we actually check for the exact time! (include seconds) in comparison
-  if (timeinfo->tm_hour == feeding_schedules[currentScheduleIndex].h && timeinfo->tm_min == feeding_schedules[currentScheduleIndex].m && timeinfo->tm_sec == 0) { // Check if minute is divisible by 5
-    //Serial.println("Sending duration for dispenser coming from ESP32");
-    moveServoMotor(feeding_schedules[currentScheduleIndex].d);
-    //sendToArduino.print(6);
-    delay(1200); // Just wait for 1.2 seconds to be safe
+  if (isThereStoredSchedules == true) {
+    if (timeinfo->tm_hour == feeding_schedules[currentScheduleIndex].h && timeinfo->tm_min == feeding_schedules[currentScheduleIndex].m && timeinfo->tm_sec == 0) { // Check if minute is divisible by 5
+      //Serial.println("Sending duration for dispenser coming from ESP32");
+      moveServoMotor(feeding_schedules[currentScheduleIndex].d);
+      //sendToArduino.print(6);
+      delay(1200); // Just wait for 1.2 seconds to be safe
+    }
   }
 
   // RESET DEVICE HANDLER
