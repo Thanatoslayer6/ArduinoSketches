@@ -5,6 +5,7 @@
 #include <PubSubClient.h>
 #include <WiFiClientSecure.h>
 #include <ESP32Servo.h>
+#include <HTTPClient.h>
 #include "esp_camera.h"
 #include "secrets.h"
 #include "ArduinoJson.h"
@@ -49,9 +50,9 @@ int currentScheduleIndex = 0;
 // 32 - 95 -> 64 bytes = PSK
 // 96 - 2047 -> 1952 bytes = Schedule
 struct TimeData {
-  int h; // hour
-  int m; // minute
-  int d; // duration
+  int h = -1; // hour
+  int m = -1; // minute
+  int d = -1; // duration
 };
 
 TimeData feeding_schedules[10];
@@ -59,6 +60,7 @@ TimeData feeding_schedules[10];
 void setup() { // TODO: EEPROM for wifi and ssid, also connection to database...
   Serial.begin(115200);
   pinMode(RESETBTN_PIN, INPUT); // Use GPIO2 of ESP32-Cam which will act as reset button
+  dispenser.attach(DISPENSER_PIN); // Use GPIO14 of ESP32-Cam for servo motor
   EEPROM.begin(2048); // Use about 2KB of EEPROM
 
   sendToArduino.begin(9600, SERIAL_8N1, 2, 3);
@@ -74,9 +76,17 @@ void setup() { // TODO: EEPROM for wifi and ssid, also connection to database...
     // Connect to MQTT
     ConnectToMQTT();
   }
+  dispenser.write(0); // Reset servo first
+  Serial.println("Resetted dispenser to 0 degrees");
 }
 
 void saveScheduleToEEPROM() {
+  // First clear the schedules from the eeprom 96-2047
+  Serial.println("Erasing schedules from the EEPROM");
+  for (int i = 96; i < 2048; i++) {
+    EEPROM.write(i, 0);
+  }
+  Serial.println("Schedules are now cleared (not commited)");
   // Set the flag
   int eepromAddr = 96;
   EEPROM.write(eepromAddr, 0xFF); // Set a flag or something...
@@ -87,6 +97,7 @@ void saveScheduleToEEPROM() {
   }
   EEPROM.commit();
   isThereStoredSchedules = true;
+  Serial.println("Latest schedule is now stored...");
 }
 
 void readScheduleFromEEPROM() {
@@ -351,22 +362,14 @@ void messageReceived(char* topic, byte* payload, unsigned int length) {
       Serial.println(error.f_str());
       return;
     }
-
-    // First clear the schedules from the eeprom 96-2047
-    Serial.println("Erasing schedules from the EEPROM");
-    for (int i = 96; i < 2048; i++) {
-      EEPROM.write(i, 0);
-    }
-    //EEPROM.commit(); // Save changes to EEPROM
-    Serial.println("Schedules are now erased... but not saved for now...");
+    Serial.print(message);
     // Schedules, in this case is only limited to 10
-    //TimeData schedule[10];
-    int i = 0;
     // Access the parsed data
+    int i = 0;
     for (JsonObject item : doc.as<JsonArray>()) {
-      feeding_schedules[i].h = item["h"]; // 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24
-      feeding_schedules[i].m = item["m"]; // 60, 60, 60, 60, 60, 60, 60, 60, 60, 60, 60, 60, 60, 60, 60
-      feeding_schedules[i].d = item["d"]; // 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, ...
+      feeding_schedules[i].h = item["h"];
+      feeding_schedules[i].m = item["m"];
+      feeding_schedules[i].d = item["d"];
       i++;
       if (i < 10) {
         break;
@@ -384,11 +387,17 @@ void loop() {
 
   // If we want the function to only execute once, then we actually check for the exact time! (include seconds) in comparison
   if (isThereStoredSchedules == true) {
-    if (timeinfo->tm_hour == feeding_schedules[currentScheduleIndex].h && timeinfo->tm_min == feeding_schedules[currentScheduleIndex].m && timeinfo->tm_sec == 0) { // Check if minute is divisible by 5
+    if (timeinfo->tm_hour == feeding_schedules[currentScheduleIndex].h && timeinfo->tm_min == feeding_schedules[currentScheduleIndex].m && timeinfo->tm_sec == 0) {
       //Serial.println("Sending duration for dispenser coming from ESP32");
       moveServoMotor(feeding_schedules[currentScheduleIndex].d);
-      //sendToArduino.print(6);
-      delay(1200); // Just wait for 1.2 seconds to be safe
+      currentScheduleIndex++;
+      if (currentScheduleIndex < 10) {
+        if (feeding_schedules[currentScheduleIndex].h == -1 && feeding_schedules[currentScheduleIndex].m == -1) {
+          currentScheduleIndex = 0; // Reset from the beginning of stored schedules
+        }
+      } else {
+        currentScheduleIndex = 0; // Just reset
+      }
     }
   }
 
