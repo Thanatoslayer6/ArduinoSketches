@@ -41,7 +41,7 @@ Servo dispenser;
 // Necessary variables and definitions
 bool streamToggled = false;
 bool isThereStoredSchedules = false;
-int currentScheduleIndex = 0;
+//int currentScheduleIndex = 0;
 #define DISPENSER_PIN 14
 #define RESETBTN_PIN 2
 
@@ -141,6 +141,7 @@ void ConnectToMQTT() {
   // First set root certificate
   esp32cam.setCACert(root_ca);
   client.setBufferSize(32768); // around 32kb
+  //client.setBufferSize(65536); // around 64kb
   client.setServer(MQTTserver, MQTTport);
   client.setCallback(messageReceived);
   while (!client.connected()) {
@@ -188,7 +189,7 @@ void CameraInit() {
   //config.pixel_format = PIXFORMAT_RGB565; // for face detection/recognition
   config.grab_mode = CAMERA_GRAB_WHEN_EMPTY;
   config.fb_location = CAMERA_FB_IN_PSRAM;
-  config.jpeg_quality = 32; // From 10-63 (lower means higher quality)
+  config.jpeg_quality = 24; // From 10-63 (lower means higher quality)
   config.fb_count = 2;
 
   // camera init
@@ -205,19 +206,21 @@ void getImage() {
   camera_fb_t *fb = esp_camera_fb_get();
   // Check if there's an image with jpeg format, and is less than 32kb
   if (fb != NULL && fb->format == PIXFORMAT_JPEG && fb->len < 32768) {
+  //if (fb != NULL && fb->format == PIXFORMAT_JPEG && fb->len < 65536) {
     Serial.print("Image Length: ");
     Serial.print(fb->len);
     Serial.println();
     bool result = client.publish(STREAM_TOPIC, fb->buf, fb->len);
-    Serial.println(result);
-
+    //Serial.println(result);
     if (!result) {
       ESP.restart();
     }
+  } else {
+    Serial.println("Failed to take image");
+    return;
   }
   // Release the frame buffer
   esp_camera_fb_return(fb);
-  delay(50); // Miniscule duration for the esp32 to gain strength
 }
 
 void ConnectToWifi() {
@@ -385,19 +388,60 @@ void loop() {
   time_t now = time(nullptr); // Get current time
   struct tm* timeinfo = localtime(&now); // Convert to local time
 
-  // If we want the function to only execute once, then we actually check for the exact time! (include seconds) in comparison
   if (isThereStoredSchedules == true) {
-    if (timeinfo->tm_hour == feeding_schedules[currentScheduleIndex].h && timeinfo->tm_min == feeding_schedules[currentScheduleIndex].m && timeinfo->tm_sec == 0) {
-      //Serial.println("Sending duration for dispenser coming from ESP32");
-      moveServoMotor(feeding_schedules[currentScheduleIndex].d);
-      currentScheduleIndex++;
-      if (currentScheduleIndex < 10) {
+    for (int currentScheduleIndex = 0; currentScheduleIndex < 10; currentScheduleIndex++) { // Loop over the stored schedule array to check which is the nearest time, break when empty...
+      if (feeding_schedules[currentScheduleIndex].h == -1 && feeding_schedules[currentScheduleIndex].m == -1) {
+        break;
+      } else {
+        // If we want the function to only execute once, then we actually check for the exact time! (include seconds) in comparison
+        if (timeinfo->tm_hour == feeding_schedules[currentScheduleIndex].h && timeinfo->tm_min == feeding_schedules[currentScheduleIndex].m && timeinfo->tm_sec == 0) {
+          //Serial.println("Sending duration for dispenser coming from ESP32");
+          moveServoMotor(feeding_schedules[currentScheduleIndex].d);
+
+          // Post data on database, first declare the necessary variables
+          StaticJsonDocument<256> doc;
+          String json;
+          char timeStr[32];
+
+          strftime(timeStr, sizeof(timeStr), "%a %d, %b, %I:%M %p", timeinfo);
+          doc["type"] = "Feed Log";
+          doc["didFail"] = false;
+          doc["duration"] = feeding_schedules[currentScheduleIndex].d / 1000;
+          doc["dateFinished"] = timeStr;
+
+          // Serialize the JSON object
+          serializeJson(doc, json);
+
+          // Define the HTTP client
+          HTTPClient http;
+          http.begin(CRUD_API + String("/api/logs/client/") + PRODUCT_ID); // Replace with your server URL
+          http.addHeader("Content-Type", "application/json");
+
+          // Send the POST request with JSON data
+          int httpResponseCode = http.POST(json);
+
+          // Check for response
+          if (httpResponseCode > 0) {
+            //String response = http.getString();
+            Serial.println("Successfully published to feeding log to database - Status Code: " + httpResponseCode);
+            //Serial.println(response);
+          } else {
+            Serial.println("Error sending feeding log to database! - Status Code: " + httpResponseCode);
+          }
+          http.end();
+        }
+      }
+
+      /*
+        currentScheduleIndex++;
+        if (currentScheduleIndex < 10) {
         if (feeding_schedules[currentScheduleIndex].h == -1 && feeding_schedules[currentScheduleIndex].m == -1) {
           currentScheduleIndex = 0; // Reset from the beginning of stored schedules
         }
-      } else {
+        } else {
         currentScheduleIndex = 0; // Just reset
-      }
+        }
+      */
     }
   }
 
