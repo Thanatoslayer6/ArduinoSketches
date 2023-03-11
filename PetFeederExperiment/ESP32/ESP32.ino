@@ -4,7 +4,6 @@
 #include <HardwareSerial.h>
 #include <PubSubClient.h>
 #include <WiFiClientSecure.h>
-#include <ESP32Servo.h>
 #include <HTTPClient.h>
 #include "esp_camera.h"
 #include "secrets.h"
@@ -36,19 +35,20 @@ HardwareSerial sendToArduino(1);
 WiFiClientSecure esp32cam;
 // Create mqtt client
 PubSubClient client(esp32cam);
-Servo dispenser;
+//Servo dispenser;
 
 // Necessary variables and definitions
 bool streamToggled = false;
-bool isThereStoredSchedules = false;
+//bool isThereStoredSchedules = false;
 //int currentScheduleIndex = 0;
-#define DISPENSER_PIN 14
+//#define DISPENSER_PIN 14
 #define RESETBTN_PIN 2
 
 // Struct for storing schedule
 // 0 - 31 -> 32 bytes = SSID
 // 32 - 95 -> 64 bytes = PSK
 // 96 - 2047 -> 1952 bytes = Schedule
+/*
 struct TimeData {
   int h = -1; // hour
   int m = -1; // minute
@@ -56,16 +56,17 @@ struct TimeData {
 };
 
 TimeData feeding_schedules[10];
+*/
 
 void setup() { // TODO: EEPROM for wifi and ssid, also connection to database...
   Serial.begin(115200);
   pinMode(RESETBTN_PIN, INPUT); // Use GPIO2 of ESP32-Cam which will act as reset button
-  dispenser.attach(DISPENSER_PIN); // Use GPIO14 of ESP32-Cam for servo motor
-  EEPROM.begin(2048); // Use about 2KB of EEPROM
+  //dispenser.attach(DISPENSER_PIN); // Use GPIO14 of ESP32-Cam for servo motor
+  EEPROM.begin(96); // Use about 2KB of EEPROM
 
   sendToArduino.begin(9600, SERIAL_8N1, 2, 3);
   // Get stored feeding schedules
-  readScheduleFromEEPROM();
+  //readScheduleFromEEPROM();
   // Initialize Camera first
   CameraInit();
 
@@ -76,10 +77,10 @@ void setup() { // TODO: EEPROM for wifi and ssid, also connection to database...
     // Connect to MQTT
     ConnectToMQTT();
   }
-  dispenser.write(0); // Reset servo first
-  Serial.println("Resetted dispenser to 0 degrees");
+  //dispenser.write(0); // Reset servo first
+  //Serial.println("Resetted dispenser to 0 degrees");
 }
-
+/*
 void saveScheduleToEEPROM() {
   // First clear the schedules from the eeprom 96-2047
   Serial.println("Erasing schedules from the EEPROM");
@@ -113,7 +114,7 @@ void readScheduleFromEEPROM() {
     Serial.println("There are no schedules set...");
   }
 }
-
+*/
 bool debounceButton() {
   bool stateNow = digitalRead(RESETBTN_PIN);
   if (stateNow != LOW) {
@@ -125,6 +126,7 @@ bool debounceButton() {
   return stateNow;
 }
 
+/*
 // Pass number of seconds in milliseconds
 void moveServoMotor(uint16_t duration) {
   Serial.print("Moved servo motor by 90 degrees for ");
@@ -135,7 +137,7 @@ void moveServoMotor(uint16_t duration) {
   delay(duration);
   dispenser.write(0);
 }
-
+*/
 
 void ConnectToMQTT() {
   // First set root certificate
@@ -157,8 +159,8 @@ void ConnectToMQTT() {
   }
   // Subscribe to the given topics
   client.subscribe(AUTH_TOPIC, 1);
-  client.subscribe(FEED_DURATION_TOPIC, 1);
-  client.subscribe(FEED_SCHEDULE_TOPIC, 1);
+  //client.subscribe(FEED_DURATION_TOPIC, 1);
+  //client.subscribe(FEED_SCHEDULE_TOPIC, 1);
   client.subscribe(TOGGLE_STREAM_TOPIC, 1);
   return;
 }
@@ -237,6 +239,7 @@ void ConnectToWifi() {
   }
   Serial.print("SSID: ");
   Serial.print(ssid);
+  Serial.println();
   //Serial.println("Reading PSK ->");
   for (int i = 32; i < 96; i++) {
     //pwd += char(EEPROM.read(i));
@@ -248,6 +251,7 @@ void ConnectToWifi() {
   }
   Serial.print("PSK: ");
   Serial.print(pwd);
+  Serial.println();
 
   // MANUAL WIFI SETUP (If there is some password)
   if (!ssid.isEmpty() && !pwd.isEmpty()) {
@@ -323,13 +327,15 @@ void messageReceived(char* topic, byte* payload, unsigned int length) {
   memcpy(message, payload, length);
   message[length] = '\0';
   // ~~~~~~~~~~~ End
-
+  /*
   if (strcmp(topic, FEED_DURATION_TOPIC) == 0) {
     int duration = atoi(message);
     moveServoMotor(duration);
     // Publish something to inform client that action is successful
     client.publish(FEED_DURATION_RESPONSE_TOPIC, "true");
-  } else if (strcmp(topic, TOGGLE_STREAM_TOPIC) == 0) {
+  } else 
+  */
+  if (strcmp(topic, TOGGLE_STREAM_TOPIC) == 0) {
     Serial.print(message);
     // On and Off
     if (String(message) == "on") {
@@ -356,7 +362,9 @@ void messageReceived(char* topic, byte* payload, unsigned int length) {
     } else {
       Serial.println("Product is invalid!");
     }
-  } else if (strcmp(topic, FEED_SCHEDULE_TOPIC) == 0) {
+  } 
+  /*
+  else if (strcmp(topic, FEED_SCHEDULE_TOPIC) == 0) {
     StaticJsonDocument<1024> doc;
     DeserializationError error = deserializeJson(doc, message, length);
     // Check for parsing errors
@@ -381,10 +389,12 @@ void messageReceived(char* topic, byte* payload, unsigned int length) {
 
     saveScheduleToEEPROM();
   }
+  */
   return;
 }
 
 void loop() {
+  /*
   time_t now = time(nullptr); // Get current time
   struct tm* timeinfo = localtime(&now); // Convert to local time
 
@@ -431,26 +441,16 @@ void loop() {
           http.end();
         }
       }
-
-      /*
-        currentScheduleIndex++;
-        if (currentScheduleIndex < 10) {
-        if (feeding_schedules[currentScheduleIndex].h == -1 && feeding_schedules[currentScheduleIndex].m == -1) {
-          currentScheduleIndex = 0; // Reset from the beginning of stored schedules
-        }
-        } else {
-        currentScheduleIndex = 0; // Just reset
-        }
-      */
     }
   }
+  */
 
   // RESET DEVICE HANDLER
   if (debounceButton() == HIGH) {
     //resetButtonState = HIGH;
     Serial.println("Erasing EEPROM...");
     delay(1000);
-    for (int i = 0; i < 2048; i++) { // Erase EEPROM by writing 0 to each byte
+    for (int i = 0; i < 96; i++) { // Erase EEPROM by writing 0 to each byte
       EEPROM.write(i, 0);
     }
     EEPROM.commit(); // Save changes to EEPROM

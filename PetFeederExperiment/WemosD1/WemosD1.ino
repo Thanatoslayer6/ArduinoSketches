@@ -1,7 +1,6 @@
-#include <EEPROM.h>
+#include <ESP8266HTTPClient.h>
 #include <ESP8266WiFi.h>
 #include <EEPROM.h>
-#include <ESP8266HTTPClient.h>
 #include <PubSubClient.h>
 #include <Servo.h>
 #include "ArduinoJson.h"
@@ -17,6 +16,8 @@ Servo dispenser;
 WiFiClientSecure wemos;
 // Create mqtt client
 PubSubClient client(wemos);
+// Set up the necessary certificate
+X509List lets_encrypt_cert(root_ca);
 
 // Struct for storing schedule
 // 0 - 31 -> 32 bytes = SSID
@@ -35,6 +36,8 @@ void setup() {
   EEPROM.begin(2048);
 
   dispenser.attach(DISPENSER_PIN);
+  dispenser.write(0);
+  Serial.println("Resetting servo motor location to 0 degrees");
   readScheduleFromEEPROM();
   // Tries to check for credentials in EEPROM, if not it will just inform user from serial
   connectToWifi();
@@ -45,6 +48,208 @@ void setup() {
     ConnectToMQTT();
   }
 }
+
+void connectToWifi() {
+  // Read from EEPROM
+  String ssid;
+  String pwd = "";
+  for (int i = 0; i < 32; i++) { // Read ssid
+    //ssid += char(EEPROM.read(i));
+    char c = EEPROM.read(i);
+    if (c == 0) {
+      break; // End of string
+    }
+    ssid += c;
+  } -
+  Serial.println("Reading SSID -> " + ssid);
+  for (int i = 32; i < 96; i++) {
+    //pwd += char(EEPROM.read(i));
+    char c = EEPROM.read(i);
+    if (c == 0) {
+      break; // End of string
+    }
+    pwd += c;
+  }
+  Serial.println("Reading PSK -> " + pwd);
+  if (!ssid.isEmpty() && !pwd.isEmpty()) {
+    WiFi.hostname("Wemos-D1");
+    WiFi.mode(WIFI_STA);
+    WiFi.begin(ssid.c_str(), pwd.c_str());
+    Serial.println("Connecting to access point");
+    while (WiFi.status() != WL_CONNECTED) {
+      delay(500);
+      Serial.print(".");
+    }
+    Serial.println("WiFi successfully connected");
+    hasConnected = true;
+  } else {
+    Serial.println("No stored wifi credentials found...");
+    Serial.swap(); // Switch to GPIO 15 (TX) and GPIO 13 (RX) to get credentials
+  }
+}
+
+unsigned long getEpochTimeInSeconds() {
+  time_t now;
+  struct tm timeinfo;
+  if (!getLocalTime(&timeinfo)) {
+    Serial.println("Failed to obtain time since Epoch");
+    return 0;
+  }
+  time(&now);
+  return now;
+}
+
+void ConnectToMQTT() {
+  // Make sure the time is correct when connecting to the broker
+  time_t timeSinceEpoch = getEpochTimeInSeconds();
+  wemos.setTrustAnchors(&lets_encrypt_cert);
+  wemos.setX509Time(timeSinceEpoch);
+  // Set proper settings for mqtt client
+  client.setBufferSize(128);
+  client.setServer(MQTTserver, MQTTport);
+  client.setCallback(messageReceived);
+  while (!client.connected()) {
+    Serial.println("Connecting to MQTT broker...");
+    String clientName = PRODUCT_ID + String("-wemosd1");
+    if (client.connect(clientName.c_str(), MQTTusername, MQTTpassword)) {
+      Serial.println("Connected to MQTT broker");
+    } else {
+      Serial.print("Failed to connect to MQTT broker, restarting device...");
+      delay(2000);
+      ESP.restart();
+    }
+  }
+
+  // Subscribe to the given topics
+  //client.subscribe(UVLIGHT_DURATION_TOPIC, 1);
+  client.subscribe(FEED_DURATION_TOPIC, 1);
+  client.subscribe(FEED_SCHEDULE_TOPIC, 1);
+  client.subscribe(RESET_WEMOS_TOPIC, 1);
+  // TODO: Audio
+  return;
+}
+
+
+void saveScheduleToEEPROM() {
+  // First clear the schedules from the eeprom 96-2047
+  Serial.println("Erasing schedules from the EEPROM");
+  for (int i = 96; i < 2048; i++) {
+    EEPROM.write(i, 0);
+  }
+  Serial.println("Schedules are now cleared (not commited)");
+  // Set the flag
+  int eepromAddr = 96;
+  EEPROM.write(eepromAddr, 0xFF); // Set a flag or something...
+  eepromAddr++; // start writing data at 97
+  for (int i = 0; i < 10; i++) {
+    EEPROM.put(eepromAddr, feeding_schedules[i]);
+    eepromAddr += sizeof(TimeData);
+  }
+  EEPROM.commit();
+  isThereStoredSchedules = true;
+  Serial.println("Latest schedule is now stored...");
+}
+
+void readScheduleFromEEPROM() {
+  int eepromAddr = 96;
+  if (EEPROM.read(eepromAddr) == 0xFF) {
+    isThereStoredSchedules = true;
+    eepromAddr++;
+    for (int i = 0; i < 10; i++) {
+      EEPROM.get(eepromAddr, feeding_schedules[i]);
+      eepromAddr += sizeof(TimeData);
+    }
+  } else {
+    Serial.println("There are no schedules set...");
+  }
+}
+
+void messageReceived(char* topic, byte * payload, unsigned int length) {
+  Serial.print("Message received on topic: ");
+  Serial.println(topic);
+
+  // ~~~~~~~~~~~ Make the message as a char[]
+  char message[length + 1];
+  memcpy(message, payload, length);
+  message[length] = '\0';
+  // ~~~~~~~~~~~ End
+
+  /*
+    if (strcmp(topic, UVLIGHT_DURATION_TOPIC) == 0) {
+    int duration = atoi(message);
+    toggleUVLight(duration);
+    // Publish something to inform client that action is successful
+    client.publish(UVLIGHT_DURATION_RESPONSE_TOPIC, "true");
+    }
+  */
+  if (strcmp(topic, FEED_DURATION_TOPIC) == 0) {
+    int duration = atoi(message);
+    moveServoMotor(duration);
+    // Publish something to inform client that action is successful
+    client.publish(FEED_DURATION_RESPONSE_TOPIC, "true");
+  } else if (strcmp(topic, FEED_SCHEDULE_TOPIC) == 0) {
+    StaticJsonDocument<1024> doc;
+    DeserializationError error = deserializeJson(doc, message, length);
+    // Check for parsing errors
+    if (error) {
+      Serial.print(F("deserializeJson() failed: "));
+      Serial.println(error.f_str());
+      return;
+    }
+    Serial.print(message);
+    // Schedules, in this case is only limited to 10
+    // Access the parsed data
+    int i = 0;
+    for (JsonObject item : doc.as<JsonArray>()) {
+      feeding_schedules[i].h = item["h"];
+      feeding_schedules[i].m = item["m"];
+      feeding_schedules[i].d = item["d"];
+      i++;
+      if (i < 10) {
+        break;
+      }
+    }
+    saveScheduleToEEPROM();
+  } else if (strcmp(topic, RESET_WEMOS_TOPIC) == 0) {
+    if (String(message) == "reset") {
+      clearEEPROM();
+    }
+  }
+
+  return;
+}
+
+void clearEEPROM() {
+  for (int i = 0; i < 2048; i++) {
+    EEPROM.write(i, 0);
+  }
+  EEPROM.commit();
+  Serial.println("Cleared EEPROM contents, will reset now...");
+  ESP.restart();
+}
+
+
+void moveServoMotor(uint16_t duration) {
+  Serial.print("Moved servo motor by 90 degrees for ");
+  Serial.print(duration);
+  Serial.print(" milliseconds");
+  Serial.println();
+  dispenser.write(180);
+  delay(duration);
+  dispenser.write(0);
+}
+/*
+  // Pass number of seconds in milliseconds
+  void toggleUVLight(uint16_t duration) {
+  Serial.print("UV light is on for ");
+  Serial.print(duration);
+  Serial.print(" milliseconds");
+  Serial.println();
+  digitalWrite(UVLIGHT_PIN, HIGH);
+  delay(duration);
+  digitalWrite(UVLIGHT_PIN, LOW);
+  }
+*/
 
 void loop() {
   while (Serial.available() > 0 && hasConnected == false) {
@@ -99,7 +304,7 @@ void loop() {
 
           // Define the HTTP client
           HTTPClient http;
-          http.begin(CRUD_API + String("/api/logs/client/") + PRODUCT_ID); // Replace with your server URL
+          http.begin(wemos, CRUD_API + String("/api/logs/client/") + PRODUCT_ID); // Replace with your server URL
           http.addHeader("Content-Type", "application/json");
 
           // Send the POST request with JSON data
@@ -120,191 +325,3 @@ void loop() {
   }
   client.loop();
 }
-
-void connectToWifi() {
-  // Read from EEPROM
-  String ssid;
-  String pwd = "";
-  for (int i = 0; i < 32; i++) { // Read ssid
-    //ssid += char(EEPROM.read(i));
-    char c = EEPROM.read(i);
-    if (c == 0) {
-      break; // End of string
-    }
-    ssid += c;
-  } -
-  Serial.println("Reading SSID -> " + ssid);
-  for (int i = 32; i < 96; i++) {
-    //pwd += char(EEPROM.read(i));
-    char c = EEPROM.read(i);
-    if (c == 0) {
-      break; // End of string
-    }
-    pwd += c;
-  }
-  Serial.println("Reading PSK -> " + pwd);
-  if (!ssid.isEmpty() && !pwd.isEmpty()) {
-    WiFi.begin(ssid.c_str(), pwd.c_str());
-    Serial.println("Connecting to access point");
-    while (WiFi.status() != WL_CONNECTED) {
-      delay(500);
-      Serial.print(".");
-    }
-    Serial.println("WiFi successfully connected");
-    hasConnected = true;
-  } else {
-    Serial.println("No stored wifi credentials found...");
-  }
-}
-
-void ConnectToMQTT() {
-  // First set root certificate
-  wemos.setCACert(root_ca);
-  //client.setBufferSize(32768); // around 32kb
-  client.setBufferSize(64);
-  client.setServer(MQTTserver, MQTTport);
-  client.setCallback(messageReceived);
-  while (!client.connected()) {
-    Serial.println("Connecting to MQTT broker...");
-    String clientName = PRODUCT_ID + String("-wemosd1");
-    if (client.connect(clientName, MQTTusername, MQTTpassword)) {
-      Serial.println("Connected to MQTT broker");
-    } else {
-      Serial.print("Failed to connect to MQTT broker, restarting device");
-      delay(2000);
-      ESP.restart();
-    }
-  }
-
-  // Subscribe to the given topics
-  //client.subscribe(UVLIGHT_DURATION_TOPIC, 1);
-  client.subscribe(FEED_DURATION_TOPIC, 1);
-  client.subscribe(FEED_SCHEDULE_TOPIC, 1);
-  // TODO: Audio
-  return;
-}
-
-
-void saveScheduleToEEPROM() {
-  // First clear the schedules from the eeprom 96-2047
-  Serial.println("Erasing schedules from the EEPROM");
-  for (int i = 96; i < 2048; i++) {
-    EEPROM.write(i, 0);
-  }
-  Serial.println("Schedules are now cleared (not commited)");
-  // Set the flag
-  int eepromAddr = 96;
-  EEPROM.write(eepromAddr, 0xFF); // Set a flag or something...
-  eepromAddr++; // start writing data at 97
-  for (int i = 0; i < 10; i++) {
-    EEPROM.put(eepromAddr, feeding_schedules[i]);
-    eepromAddr += sizeof(TimeData);
-  }
-  EEPROM.commit();
-  isThereStoredSchedules = true;
-  Serial.println("Latest schedule is now stored...");
-}
-
-void readScheduleFromEEPROM() {
-  int eepromAddr = 96;
-  if (EEPROM.read(eepromAddr) == 0xFF) {
-    isThereStoredSchedules = true;
-    eepromAddr++;
-    for (int i = 0; i < 10; i++) {
-      EEPROM.get(eepromAddr, feeding_schedules[i]);
-      eepromAddr += sizeof(TimeData);
-    }
-  } else {
-    Serial.println("There are no schedules set...");
-  }
-}
-
-
-
-void messageReceived(char* topic, byte * payload, unsigned int length) {
-  Serial.print("Message received on topic: ");
-  Serial.println(topic);
-
-  // ~~~~~~~~~~~ Make the message as a char[]
-  char message[length + 1];
-  memcpy(message, payload, length);
-  message[length] = '\0';
-  // ~~~~~~~~~~~ End
-
-  /*
-    if (strcmp(topic, UVLIGHT_DURATION_TOPIC) == 0) {
-    int duration = atoi(message);
-    toggleUVLight(duration);
-    // Publish something to inform client that action is successful
-    client.publish(UVLIGHT_DURATION_RESPONSE_TOPIC, "true");
-    }
-  */
-  if (strcmp(topic, FEED_DURATION_TOPIC) == 0) {
-    int duration = atoi(message);
-    moveServoMotor(duration);
-    // Publish something to inform client that action is successful
-    client.publish(FEED_DURATION_RESPONSE_TOPIC, "true");
-  } else if (strcmp(topic, FEED_SCHEDULE_TOPIC) == 0) {
-    StaticJsonDocument<1024> doc;
-    DeserializationError error = deserializeJson(doc, message, length);
-    // Check for parsing errors
-    if (error) {
-      Serial.print(F("deserializeJson() failed: "));
-      Serial.println(error.f_str());
-      return;
-    }
-    Serial.print(message);
-    // Schedules, in this case is only limited to 10
-    // Access the parsed data
-    int i = 0;
-    for (JsonObject item : doc.as<JsonArray>()) {
-      feeding_schedules[i].h = item["h"];
-      feeding_schedules[i].m = item["m"];
-      feeding_schedules[i].d = item["d"];
-      i++;
-      if (i < 10) {
-        break;
-      }
-    }
-    saveScheduleToEEPROM();
-
-  } else if (strcmp(topic, RESET_WEMOS_TOPIC) == 0) {
-    if (String(message) == "reset") {
-      clearEEPROM();
-    }
-  }
-
-  return;
-}
-
-void clearEEPROM() {
-  for (int i = 0; i < 2048; i++) {
-    EEPROM.write(i, 0);
-  }
-  EEPROM.commit();
-  Serial.println("Cleared EEPROM contents, will reset now...");
-  ESP.restart();
-}
-
-
-void moveServoMotor(uint16_t duration) {
-  Serial.print("Moved servo motor by 90 degrees for ");
-  Serial.print(duration);
-  Serial.print(" milliseconds");
-  Serial.println();
-  dispenser.write(90); // Turn 90 degrees
-  delay(duration);
-  dispenser.write(0);
-}
-/*
-  // Pass number of seconds in milliseconds
-  void toggleUVLight(uint16_t duration) {
-  Serial.print("UV light is on for ");
-  Serial.print(duration);
-  Serial.print(" milliseconds");
-  Serial.println();
-  digitalWrite(UVLIGHT_PIN, HIGH);
-  delay(duration);
-  digitalWrite(UVLIGHT_PIN, LOW);
-  }
-*/
