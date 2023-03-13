@@ -136,14 +136,3 @@ void moveServoMotor(uint16_t duration) {
     delay(duration);
     dispenser.write(0);
 }
-
-// Pass number of seconds in milliseconds
-void toggleUVLight(uint16_t duration) {
-  Serial.print("UV light is on for ");
-  Serial.print(duration);
-  Serial.print(" milliseconds");
-  Serial.println();
-  digitalWrite(UVLIGHT_PIN, HIGH);
-  delay(duration);
-  digitalWrite(UVLIGHT_PIN, LOW);
-}

@@ -174,14 +174,6 @@ void messageReceived(char* topic, byte * payload, unsigned int length) {
   message[length] = '\0';
   // ~~~~~~~~~~~ End
 
-  /*
-    if (strcmp(topic, UVLIGHT_DURATION_TOPIC) == 0) {
-    int duration = atoi(message);
-    toggleUVLight(duration);
-    // Publish something to inform client that action is successful
-    client.publish(UVLIGHT_DURATION_RESPONSE_TOPIC, "true");
-    }
-  */
   if (strcmp(topic, FEED_DURATION_TOPIC) == 0) {
     int duration = atoi(message);
     moveServoMotor(duration);
