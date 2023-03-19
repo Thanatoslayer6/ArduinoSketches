@@ -1,4 +1,3 @@
-#include <ESP8266HTTPClient.h>
 #include <ESP8266WiFi.h>
 #include <EEPROM.h>
 #include <PubSubClient.h>
@@ -6,18 +5,32 @@
 #include "ArduinoJson.h"
 #include "time.h"
 #include "secrets.h"
-#define DISPENSER_PIN D3
 
+#include "AudioFileSourceHTTPStream.h"
+#include "AudioFileSourceBuffer.h"
+#include "AudioGeneratorMP3.h"
+#include "AudioOutputI2SNoDAC.h"
+
+#define DISPENSER_PIN D3
 // Necessary global variables
+bool audioFlag = false;
 bool hasConnected = false;
 bool isThereStoredSchedules = false;
 Servo dispenser;
+
+AudioGeneratorMP3 *mp3 = NULL;
+AudioFileSourceHTTPStream *file = NULL;
+AudioFileSourceBuffer *buff = NULL;
+AudioOutputI2SNoDAC *out = NULL;
+void *preallocateBuffer = NULL;
+
 // Create secure wifi client
-WiFiClientSecure wemos;
+//WiFiClientSecure wemos;
+WiFiClient wemos;
 // Create mqtt client
 PubSubClient client(wemos);
 // Set up the necessary certificate
-X509List lets_encrypt_cert(root_ca);
+//X509List lets_encrypt_cert(root_ca);
 
 // Struct for storing schedule
 // 0 - 31 -> 32 bytes = SSID
@@ -37,6 +50,8 @@ void setup() {
 
   dispenser.attach(DISPENSER_PIN);
   dispenser.write(0);
+  // Define audio variable
+  out = new AudioOutputI2SNoDAC();
   Serial.println("Resetting servo motor location to 0 degrees");
   readScheduleFromEEPROM();
   // Tries to check for credentials in EEPROM, if not it will just inform user from serial
@@ -72,7 +87,7 @@ void connectToWifi() {
   }
   Serial.println("Reading PSK -> " + pwd);
   if (!ssid.isEmpty() && !pwd.isEmpty()) {
-    WiFi.hostname("Wemos-D1");
+    //WiFi.hostname("Wemos-D1");
     WiFi.mode(WIFI_STA);
     WiFi.begin(ssid.c_str(), pwd.c_str());
     Serial.println("Connecting to access point");
@@ -88,7 +103,8 @@ void connectToWifi() {
   }
 }
 
-unsigned long getEpochTimeInSeconds() {
+/*
+  unsigned long getEpochTimeInSeconds() {
   time_t now;
   struct tm timeinfo;
   if (!getLocalTime(&timeinfo)) {
@@ -97,13 +113,14 @@ unsigned long getEpochTimeInSeconds() {
   }
   time(&now);
   return now;
-}
+  }
+*/
 
 void ConnectToMQTT() {
   // Make sure the time is correct when connecting to the broker
-  time_t timeSinceEpoch = getEpochTimeInSeconds();
-  wemos.setTrustAnchors(&lets_encrypt_cert);
-  wemos.setX509Time(timeSinceEpoch);
+  //time_t timeSinceEpoch = getEpochTimeInSeconds();
+  //wemos.setTrustAnchors(&lets_encrypt_cert);
+  //wemos.setX509Time(timeSinceEpoch);
   // Set proper settings for mqtt client
   client.setBufferSize(128);
   client.setServer(MQTTserver, MQTTport);
@@ -111,7 +128,8 @@ void ConnectToMQTT() {
   while (!client.connected()) {
     Serial.println("Connecting to MQTT broker...");
     String clientName = PRODUCT_ID + String("-wemosd1");
-    if (client.connect(clientName.c_str(), MQTTusername, MQTTpassword)) {
+    if (client.connect(clientName.c_str())) {
+      //if (client.connect(clientName.c_str(), MQTTusername, MQTTpassword)) {
       Serial.println("Connected to MQTT broker");
     } else {
       Serial.print("Failed to connect to MQTT broker, restarting device...");
@@ -126,9 +144,9 @@ void ConnectToMQTT() {
   client.subscribe(FEED_SCHEDULE_TOPIC, 1);
   client.subscribe(RESET_WEMOS_TOPIC, 1);
   // TODO: Audio
+  client.subscribe(AUDIO_TOPIC, 1); // This topic will send in the filename
   return;
 }
-
 
 void saveScheduleToEEPROM() {
   // First clear the schedules from the eeprom 96-2047
@@ -202,6 +220,16 @@ void messageReceived(char* topic, byte * payload, unsigned int length) {
       }
     }
     saveScheduleToEEPROM();
+  } else if (strcmp(topic, AUDIO_TOPIC) == 0) {
+    if (String(message) == "stop") {
+      Serial.println("Stopping audio");
+      audioFlag = false;
+      mp3->stop();
+      delete mp3;
+      mp3 = NULL;
+    } else {
+      playAudio(message);
+    }
   } else if (strcmp(topic, RESET_WEMOS_TOPIC) == 0) {
     if (String(message) == "reset") {
       clearEEPROM();
@@ -220,6 +248,17 @@ void clearEEPROM() {
   ESP.restart();
 }
 
+void playAudio(const char* URL) {
+  file = new AudioFileSourceHTTPStream();
+  if (file->open(URL)) {
+    buff = new AudioFileSourceBuffer(file, preallocateBuffer, 8192);
+    mp3 = new AudioGeneratorMP3();
+    mp3->begin(buff, out);
+    audioFlag = true;
+  } else {
+    Serial.println("cannot open link");
+  }
+}
 
 void moveServoMotor(uint16_t duration) {
   Serial.print("Moved servo motor by 90 degrees for ");
@@ -231,8 +270,8 @@ void moveServoMotor(uint16_t duration) {
   dispenser.write(0);
 }
 /*
-  // Pass number of seconds in milliseconds
-  void toggleUVLight(uint16_t duration) {
+// Pass number of seconds in milliseconds
+void toggleUVLight(uint16_t duration) {
   Serial.print("UV light is on for ");
   Serial.print(duration);
   Serial.print(" milliseconds");
@@ -240,10 +279,37 @@ void moveServoMotor(uint16_t duration) {
   digitalWrite(UVLIGHT_PIN, HIGH);
   delay(duration);
   digitalWrite(UVLIGHT_PIN, LOW);
-  }
+}
 */
-
-void loop() {
+/*
+void audioLoop() {
+  // Audio
+  if (audioFlag == true) {
+    static int lastms = 0;
+    if (mp3->isRunning()) {
+      if (millis() - lastms > 1000) {
+        lastms = millis();
+        Serial.printf("Running for %d ms...\n", lastms);
+        Serial.flush();
+      }
+      if (!mp3->loop()) {
+        audioFlag = false;
+        mp3->stop();
+        delete mp3;
+        mp3 = NULL;
+      }
+    } else {
+      Serial.println("Stopping radio");
+      audioFlag = false;
+      mp3->stop();
+      delete mp3;
+      mp3 = NULL;
+    }
+  }
+  return;
+}
+*/
+void startingLoop() {
   while (Serial.available() > 0 && hasConnected == false) {
     // Retrieve credentials from serial... store in EEPROM, then restart device
     String credentials = Serial.readStringUntil('\0');
@@ -266,11 +332,13 @@ void loop() {
     Serial.println("Restarting device after smart config");
     ESP.restart();
   }
+  return;
+}
 
-  time_t now = time(nullptr); // Get current time
-  struct tm* timeinfo = localtime(&now); // Convert to local time
-
+void scheduleLoop() {
   if (isThereStoredSchedules == true) {
+    time_t now = time(nullptr); // Get current time
+    struct tm* timeinfo = localtime(&now); // Convert to local time
     for (int currentScheduleIndex = 0; currentScheduleIndex < 10; currentScheduleIndex++) { // Loop over the stored schedule array to check which is the nearest time, break when empty...
       if (feeding_schedules[currentScheduleIndex].h == -1 && feeding_schedules[currentScheduleIndex].m == -1) {
         break;
@@ -315,5 +383,34 @@ void loop() {
       }
     }
   }
+  return;
+}
+
+
+void loop() {
+  static int lastms = 0;
+  if (audioFlag == true) {
+    if (mp3->isRunning()) {
+      if (millis() - lastms > 1000) {
+        lastms = millis();
+        Serial.printf("Running for %d ms...\n", lastms);
+        Serial.flush();
+      }
+      if (!mp3->loop()) {
+        mp3->stop();
+        audioFlag = false;
+        delete mp3;
+        mp3 = NULL;
+      }
+    } else {
+      Serial.println("Stopping audio");
+      audioFlag = false;
+      mp3->stop();
+      delete mp3;
+      mp3 = NULL;
+    }
+  }
+  startingLoop();
+  scheduleLoop();
   client.loop();
 }
