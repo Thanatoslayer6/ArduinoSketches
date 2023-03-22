@@ -1,9 +1,9 @@
 #include <ESP8266WiFi.h>
 #include <EEPROM.h>
 #include <PubSubClient.h>
-#include <Servo.h>
+//#include <Servo.h>
 #include "ArduinoJson.h"
-#include "time.h"
+//#include "time.h"
 #include "secrets.h"
 
 #include "AudioFileSourceHTTPStream.h"
@@ -11,12 +11,12 @@
 #include "AudioGeneratorMP3.h"
 #include "AudioOutputI2SNoDAC.h"
 
-#define DISPENSER_PIN D3
+//#define DISPENSER_PIN D3
 // Necessary global variables
 bool audioFlag = false;
 bool hasConnected = false;
-bool isThereStoredSchedules = false;
-Servo dispenser;
+//bool isThereStoredSchedules = false;
+//Servo dispenser;
 
 AudioGeneratorMP3 *mp3 = NULL;
 AudioFileSourceHTTPStream *file = NULL;
@@ -29,13 +29,12 @@ void *preallocateBuffer = NULL;
 WiFiClient wemos;
 // Create mqtt client
 PubSubClient client(wemos);
-// Set up the necessary certificate
-//X509List lets_encrypt_cert(root_ca);
 
 // Struct for storing schedule
 // 0 - 31 -> 32 bytes = SSID
 // 32 - 95 -> 64 bytes = PSK
 // 96 - 2047 -> 1952 bytes = Schedule
+/*
 struct TimeData {
   int h = -1; // hour
   int m = -1; // minute
@@ -43,22 +42,21 @@ struct TimeData {
 };
 
 TimeData feeding_schedules[10];
-
+*/
 void setup() {
   Serial.begin(9600);
-  EEPROM.begin(2048);
+  EEPROM.begin(96);
 
-  dispenser.attach(DISPENSER_PIN);
-  dispenser.write(0);
+  //dispenser.attach(DISPENSER_PIN);
+  //dispenser.write(0);
   // Define audio variable
   out = new AudioOutputI2SNoDAC();
-  Serial.println("Resetting servo motor location to 0 degrees");
-  readScheduleFromEEPROM();
+  //readScheduleFromEEPROM();
   // Tries to check for credentials in EEPROM, if not it will just inform user from serial
   connectToWifi();
   if (WiFi.status() == WL_CONNECTED) {
     // Configure NTP
-    configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
+    //configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
     // Connect to MQTT
     ConnectToMQTT();
   }
@@ -140,14 +138,13 @@ void ConnectToMQTT() {
 
   // Subscribe to the given topics
   //client.subscribe(UVLIGHT_DURATION_TOPIC, 1);
-  client.subscribe(FEED_DURATION_TOPIC, 1);
-  client.subscribe(FEED_SCHEDULE_TOPIC, 1);
+  //client.subscribe(FEED_DURATION_TOPIC, 1);
+  //client.subscribe(FEED_SCHEDULE_TOPIC, 1);
   client.subscribe(RESET_WEMOS_TOPIC, 1);
-  // TODO: Audio
   client.subscribe(AUDIO_TOPIC, 1); // This topic will send in the filename
   return;
 }
-
+/*
 void saveScheduleToEEPROM() {
   // First clear the schedules from the eeprom 96-2047
   Serial.println("Erasing schedules from the EEPROM");
@@ -181,7 +178,7 @@ void readScheduleFromEEPROM() {
     Serial.println("There are no schedules set...");
   }
 }
-
+*/
 void messageReceived(char* topic, byte * payload, unsigned int length) {
   Serial.print("Message received on topic: ");
   Serial.println(topic);
@@ -192,35 +189,7 @@ void messageReceived(char* topic, byte * payload, unsigned int length) {
   message[length] = '\0';
   // ~~~~~~~~~~~ End
 
-  if (strcmp(topic, FEED_DURATION_TOPIC) == 0) {
-    int duration = atoi(message);
-    moveServoMotor(duration);
-    // Publish something to inform client that action is successful
-    client.publish(FEED_DURATION_RESPONSE_TOPIC, "true");
-  } else if (strcmp(topic, FEED_SCHEDULE_TOPIC) == 0) {
-    StaticJsonDocument<1024> doc;
-    DeserializationError error = deserializeJson(doc, message, length);
-    // Check for parsing errors
-    if (error) {
-      Serial.print(F("deserializeJson() failed: "));
-      Serial.println(error.f_str());
-      return;
-    }
-    Serial.print(message);
-    // Schedules, in this case is only limited to 10
-    // Access the parsed data
-    int i = 0;
-    for (JsonObject item : doc.as<JsonArray>()) {
-      feeding_schedules[i].h = item["h"];
-      feeding_schedules[i].m = item["m"];
-      feeding_schedules[i].d = item["d"];
-      i++;
-      if (i < 10) {
-        break;
-      }
-    }
-    saveScheduleToEEPROM();
-  } else if (strcmp(topic, AUDIO_TOPIC) == 0) {
+  if (strcmp(topic, AUDIO_TOPIC) == 0) {
     if (String(message) == "stop") {
       Serial.println("Stopping audio");
       audioFlag = false;
@@ -240,7 +209,7 @@ void messageReceived(char* topic, byte * payload, unsigned int length) {
 }
 
 void clearEEPROM() {
-  for (int i = 0; i < 2048; i++) {
+  for (int i = 0; i < 96; i++) {
     EEPROM.write(i, 0);
   }
   EEPROM.commit();
@@ -249,6 +218,9 @@ void clearEEPROM() {
 }
 
 void playAudio(const char* URL) {
+  Serial.print("About to play: ");
+  Serial.println(URL);
+  //delay(5000);
   file = new AudioFileSourceHTTPStream();
   if (file->open(URL)) {
     buff = new AudioFileSourceBuffer(file, preallocateBuffer, 8192);
@@ -259,7 +231,7 @@ void playAudio(const char* URL) {
     Serial.println("cannot open link");
   }
 }
-
+/*
 void moveServoMotor(uint16_t duration) {
   Serial.print("Moved servo motor by 90 degrees for ");
   Serial.print(duration);
@@ -269,6 +241,7 @@ void moveServoMotor(uint16_t duration) {
   delay(duration);
   dispenser.write(0);
 }
+*/
 /*
 // Pass number of seconds in milliseconds
 void toggleUVLight(uint16_t duration) {
@@ -334,7 +307,7 @@ void startingLoop() {
   }
   return;
 }
-
+/*
 void scheduleLoop() {
   if (isThereStoredSchedules == true) {
     time_t now = time(nullptr); // Get current time
@@ -385,9 +358,10 @@ void scheduleLoop() {
   }
   return;
 }
-
+*/
 
 void loop() {
+  startingLoop();
   static int lastms = 0;
   if (audioFlag == true) {
     if (mp3->isRunning()) {
@@ -410,7 +384,6 @@ void loop() {
       mp3 = NULL;
     }
   }
-  startingLoop();
-  scheduleLoop();
   client.loop();
+  //scheduleLoop();
 }
