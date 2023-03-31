@@ -7,6 +7,7 @@
 #include <ESP32Servo.h>
 #include <HTTPClient.h>
 #include <neotimer.h>
+#include <ezButton.h>
 #include "esp_camera.h"
 #include "secrets.h"
 #include "ArduinoJson.h"
@@ -44,10 +45,10 @@ Neotimer uvTimer = Neotimer();
 // Necessary variables and definitions
 bool streamToggled = false;
 bool isThereStoredSchedules = false;
-//int currentScheduleIndex = 0;
 #define UVLIGHT_PIN 15
 #define DISPENSER_PIN 14
 #define RESETBTN_PIN 2
+ezButton button(RESETBTN_PIN);  // create ezButton object that attach to pin 2
 
 // Struct for storing schedule
 // 0 - 31 -> 32 bytes = SSID
@@ -63,7 +64,8 @@ TimeData feeding_schedules[10];
 
 void setup() { // TODO: EEPROM for wifi and ssid, also connection to database...
   Serial.begin(115200);
-  pinMode(RESETBTN_PIN, INPUT); // Use GPIO2 of ESP32-Cam which will act as reset button
+  //pinMode(RESETBTN_PIN, INPUT); // Use GPIO2 of ESP32-Cam which will act as reset button
+  button.setDebounceTime(50);
   pinMode(UVLIGHT_PIN, OUTPUT);
   dispenser.attach(DISPENSER_PIN); // Use GPIO14 of ESP32-Cam for servo motor
   EEPROM.begin(2048); // Use about 2KB of EEPROM
@@ -118,8 +120,8 @@ void readScheduleFromEEPROM() {
     Serial.println("There are no schedules set...");
   }
 }
-
-bool debounceButton() {
+/*
+  bool debounceButton() {
   bool stateNow = digitalRead(RESETBTN_PIN);
   if (stateNow != LOW) {
     delay(100);
@@ -128,21 +130,21 @@ bool debounceButton() {
     delay(100);
   }
   return stateNow;
-}
-
+  }
+*/
 // Pass number of seconds in milliseconds
 void moveServoMotor(uint16_t duration) {
   servoTimer.set(duration);
-  Serial.print("Moving servo motor by 180 degrees for ");
+  Serial.print("Moving servo motor by 90 degrees for ");
   Serial.print(duration);
   Serial.print(" milliseconds");
   Serial.println();
-  dispenser.write(180);
+  dispenser.write(90);
   servoTimer.start();
 }
 
 // Pass number of seconds in milliseconds
-void toggleUVLight(uint16_t duration) {
+void toggleUVLight(unsigned long duration) {
   uvTimer.set(duration);
   Serial.print("UV light is on for ");
   Serial.print(duration);
@@ -179,6 +181,7 @@ void ConnectToMQTT() {
   client.subscribe(FEED_SCHEDULE_TOPIC, 1);
   client.subscribe(UVLIGHT_DURATION_TOPIC, 1);
   client.subscribe(TOGGLE_STREAM_TOPIC, 1);
+  client.subscribe(RESET_ESP_TOPIC, 1);
   return;
 }
 
@@ -327,6 +330,7 @@ void ConnectToWifi() {
     EEPROM.commit();
     // Reset the device (this is important for MQTT to work idk why)
     Serial.println("Restarting device after smart config");
+    EEPROM.end();
     ESP.restart();
   }
   return;
@@ -399,11 +403,29 @@ void messageReceived(char* topic, byte* payload, unsigned int length) {
     }
     saveScheduleToEEPROM();
   } else if (strcmp(topic, UVLIGHT_DURATION_TOPIC) == 0) {
-    uint16_t duration = atoi(message);
-    toggleUVLight(duration);
-    // Publish something to inform client that action is successful
-    client.publish(UVLIGHT_DURATION_RESPONSE_TOPIC, "true");
-    client.publish(NOTIFICATION_TOPIC, "uv-success");
+    if (String(message) == "stop") {
+      Serial.println("Cancelled sterilization... turning off uv light now");
+      uvTimer.stop();
+      digitalWrite(UVLIGHT_PIN, LOW);
+      uvTimer.reset();
+    } else {
+      unsigned long duration = atoi(message);
+      toggleUVLight(duration);
+      // Publish something to inform client that action is successful
+      client.publish(UVLIGHT_DURATION_RESPONSE_TOPIC, "true");
+      client.publish(NOTIFICATION_TOPIC, "uv-success");
+    }
+  } else if (strcmp(topic, RESET_ESP_TOPIC) == 0) {
+    if (String(message) == "reset") {
+      Serial.println("Erasing EEPROM...");
+      delay(1000);
+      for (int i = 0; i < 2048; i++) { // Erase EEPROM by writing 0 to each byte
+        EEPROM.write(i, 0);
+      }
+      EEPROM.commit(); // Save changes to EEPROM
+      delay(3000); // Wait for 3 seconds to avoid multiple erasures
+      ESP.restart();
+    }
   }
   return;
 }
@@ -460,6 +482,20 @@ void scheduleLoop() {
 }
 
 void loop() {
+  button.loop(); // MUST call the loop() function first
+
+  if(button.isPressed()) {
+    Serial.println("Erasing ESP32 EEPROM...");
+    delay(1000);
+    for (int i = 0; i < 2048; i++) { // Erase EEPROM by writing 0 to each byte
+      EEPROM.write(i, 0);
+    }
+    EEPROM.commit(); // Save changes to EEPROM
+    delay(3000); // Wait for 3 seconds to avoid multiple erasures
+    EEPROM.end();
+    ESP.restart();
+  }
+  
   if (servoTimer.done()) {
     Serial.println("Done dispensing food... restoring back to original position");
     dispenser.write(0);
@@ -471,25 +507,13 @@ void loop() {
     digitalWrite(UVLIGHT_PIN, LOW);
     uvTimer.reset();
   }
-  
+
   scheduleLoop();
 
   // RESET DEVICE HANDLER
-  if (debounceButton() == HIGH) {
-    //resetButtonState = HIGH;
-    Serial.println("Erasing EEPROM...");
-    delay(1000);
-    for (int i = 0; i < 2048; i++) { // Erase EEPROM by writing 0 to each byte
-      EEPROM.write(i, 0);
-    }
-    EEPROM.commit(); // Save changes to EEPROM
-    Serial.println("EEPROM erased... will reset other microcontroller...");
-    client.publish(RESET_WEMOS_TOPIC, "reset");
-    delay(3000); // Wait for 3 seconds to avoid multiple erasures
-    ESP.restart();
-  }
   if (streamToggled == true && client.connected() == true) {
     getImage();
   }
+
   client.loop();
 }

@@ -1,65 +1,58 @@
 #include <ESP8266WiFi.h>
 #include <EEPROM.h>
 #include <PubSubClient.h>
-//#include <Servo.h>
-#include "ArduinoJson.h"
-//#include "time.h"
+#include <ezButton.h>
 #include "secrets.h"
+#include "boot_sound.h"
 
 #include "AudioFileSourceHTTPStream.h"
 #include "AudioFileSourceBuffer.h"
 #include "AudioGeneratorMP3.h"
+#include "AudioGeneratorWAV.h"
+#include "AudioFileSourcePROGMEM.h"
 #include "AudioOutputI2SNoDAC.h"
 
-//#define DISPENSER_PIN D3
 // Necessary global variables
-bool audioFlag = false;
 bool hasConnected = false;
-//bool isThereStoredSchedules = false;
-//Servo dispenser;
+bool isAudioPlaying = false;
+#define RESETBTN_PIN D3
+ezButton button(RESETBTN_PIN);
 
 AudioGeneratorMP3 *mp3 = NULL;
+AudioGeneratorWAV *wav = NULL;
+AudioFileSourcePROGMEM *file_progmem = NULL;
 AudioFileSourceHTTPStream *file = NULL;
 AudioFileSourceBuffer *buff = NULL;
 AudioOutputI2SNoDAC *out = NULL;
 void *preallocateBuffer = NULL;
 
-// Create secure wifi client
-//WiFiClientSecure wemos;
+// Create wifi client
 WiFiClient wemos;
+
 // Create mqtt client
 PubSubClient client(wemos);
 
-// Struct for storing schedule
-// 0 - 31 -> 32 bytes = SSID
-// 32 - 95 -> 64 bytes = PSK
-// 96 - 2047 -> 1952 bytes = Schedule
-/*
-struct TimeData {
-  int h = -1; // hour
-  int m = -1; // minute
-  int d = -1; // duration
-};
-
-TimeData feeding_schedules[10];
-*/
 void setup() {
   Serial.begin(9600);
+  button.setDebounceTime(50);
+  Serial.setDebugOutput(true);
   EEPROM.begin(96);
 
-  //dispenser.attach(DISPENSER_PIN);
-  //dispenser.write(0);
-  // Define audio variable
-  out = new AudioOutputI2SNoDAC();
-  //readScheduleFromEEPROM();
   // Tries to check for credentials in EEPROM, if not it will just inform user from serial
   connectToWifi();
   if (WiFi.status() == WL_CONNECTED) {
-    // Configure NTP
-    //configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
     // Connect to MQTT
     ConnectToMQTT();
+    // Play sound reminder
+    playBootSound();
   }
+}
+
+void playBootSound() {
+  file_progmem = new AudioFileSourcePROGMEM(boot_sound, sizeof(boot_sound));
+  out = new AudioOutputI2SNoDAC();
+  wav = new AudioGeneratorWAV();
+  wav->begin(file_progmem, out);
 }
 
 void connectToWifi() {
@@ -67,28 +60,34 @@ void connectToWifi() {
   String ssid;
   String pwd = "";
   for (int i = 0; i < 32; i++) { // Read ssid
-    //ssid += char(EEPROM.read(i));
     char c = EEPROM.read(i);
     if (c == 0) {
       break; // End of string
+    } else {
+      ssid += c;
     }
-    ssid += c;
   } -
   Serial.println("Reading SSID -> " + ssid);
   for (int i = 32; i < 96; i++) {
-    //pwd += char(EEPROM.read(i));
     char c = EEPROM.read(i);
     if (c == 0) {
       break; // End of string
+    } else {
+      pwd += c;
     }
-    pwd += c;
   }
   Serial.println("Reading PSK -> " + pwd);
   if (!ssid.isEmpty() && !pwd.isEmpty()) {
-    //WiFi.hostname("Wemos-D1");
-    WiFi.mode(WIFI_STA);
+    WiFi.hostname("Wemos-D1");
+    /*
+      WiFi.persistent(false); //These 3 lines are a required work around
+      WiFi.mode(WIFI_OFF);    //otherwise the module will not reconnect
+      WiFi.forceSleepWake();
+      WiFi.setSleepMode(WIFI_NONE_SLEEP);
+      WiFi.mode(WIFI_STA);
+      Serial.println("Connecting to access point");
+    */
     WiFi.begin(ssid.c_str(), pwd.c_str());
-    Serial.println("Connecting to access point");
     while (WiFi.status() != WL_CONNECTED) {
       delay(500);
       Serial.print(".");
@@ -101,24 +100,8 @@ void connectToWifi() {
   }
 }
 
-/*
-  unsigned long getEpochTimeInSeconds() {
-  time_t now;
-  struct tm timeinfo;
-  if (!getLocalTime(&timeinfo)) {
-    Serial.println("Failed to obtain time since Epoch");
-    return 0;
-  }
-  time(&now);
-  return now;
-  }
-*/
-
 void ConnectToMQTT() {
   // Make sure the time is correct when connecting to the broker
-  //time_t timeSinceEpoch = getEpochTimeInSeconds();
-  //wemos.setTrustAnchors(&lets_encrypt_cert);
-  //wemos.setX509Time(timeSinceEpoch);
   // Set proper settings for mqtt client
   client.setBufferSize(128);
   client.setServer(MQTTserver, MQTTport);
@@ -127,7 +110,6 @@ void ConnectToMQTT() {
     Serial.println("Connecting to MQTT broker...");
     String clientName = PRODUCT_ID + String("-wemosd1");
     if (client.connect(clientName.c_str())) {
-      //if (client.connect(clientName.c_str(), MQTTusername, MQTTpassword)) {
       Serial.println("Connected to MQTT broker");
     } else {
       Serial.print("Failed to connect to MQTT broker, restarting device...");
@@ -137,48 +119,11 @@ void ConnectToMQTT() {
   }
 
   // Subscribe to the given topics
-  //client.subscribe(UVLIGHT_DURATION_TOPIC, 1);
-  //client.subscribe(FEED_DURATION_TOPIC, 1);
-  //client.subscribe(FEED_SCHEDULE_TOPIC, 1);
-  client.subscribe(RESET_WEMOS_TOPIC, 1);
-  client.subscribe(AUDIO_TOPIC, 1); // This topic will send in the filename
+  //client.subscribe(RESET_WEMOS_TOPIC, 1);
+  client.subscribe(AUDIO_TOPIC, 1); // This topic will send in the url to play
   return;
 }
-/*
-void saveScheduleToEEPROM() {
-  // First clear the schedules from the eeprom 96-2047
-  Serial.println("Erasing schedules from the EEPROM");
-  for (int i = 96; i < 2048; i++) {
-    EEPROM.write(i, 0);
-  }
-  Serial.println("Schedules are now cleared (not commited)");
-  // Set the flag
-  int eepromAddr = 96;
-  EEPROM.write(eepromAddr, 0xFF); // Set a flag or something...
-  eepromAddr++; // start writing data at 97
-  for (int i = 0; i < 10; i++) {
-    EEPROM.put(eepromAddr, feeding_schedules[i]);
-    eepromAddr += sizeof(TimeData);
-  }
-  EEPROM.commit();
-  isThereStoredSchedules = true;
-  Serial.println("Latest schedule is now stored...");
-}
 
-void readScheduleFromEEPROM() {
-  int eepromAddr = 96;
-  if (EEPROM.read(eepromAddr) == 0xFF) {
-    isThereStoredSchedules = true;
-    eepromAddr++;
-    for (int i = 0; i < 10; i++) {
-      EEPROM.get(eepromAddr, feeding_schedules[i]);
-      eepromAddr += sizeof(TimeData);
-    }
-  } else {
-    Serial.println("There are no schedules set...");
-  }
-}
-*/
 void messageReceived(char* topic, byte * payload, unsigned int length) {
   Serial.print("Message received on topic: ");
   Serial.println(topic);
@@ -191,20 +136,21 @@ void messageReceived(char* topic, byte * payload, unsigned int length) {
 
   if (strcmp(topic, AUDIO_TOPIC) == 0) {
     if (String(message) == "stop") {
-      Serial.println("Stopping audio");
-      audioFlag = false;
-      mp3->stop();
-      delete mp3;
-      mp3 = NULL;
+      Serial.println("Stopping audio manually");
+      stopPlaying();
     } else {
+      Serial.print("About to play: ");
+      Serial.println(message);
       playAudio(message);
     }
-  } else if (strcmp(topic, RESET_WEMOS_TOPIC) == 0) {
+  } 
+  /*
+  else if (strcmp(topic, RESET_WEMOS_TOPIC) == 0) {
     if (String(message) == "reset") {
       clearEEPROM();
     }
   }
-
+  */
   return;
 }
 
@@ -214,76 +160,25 @@ void clearEEPROM() {
   }
   EEPROM.commit();
   Serial.println("Cleared EEPROM contents, will reset now...");
+  EEPROM.end();
+  delay(3000);
   ESP.restart();
 }
 
 void playAudio(const char* URL) {
-  Serial.print("About to play: ");
-  Serial.println(URL);
-  //delay(5000);
+  isAudioPlaying = true;
   file = new AudioFileSourceHTTPStream();
   if (file->open(URL)) {
-    buff = new AudioFileSourceBuffer(file, preallocateBuffer, 8192);
+    buff = new AudioFileSourceBuffer(file, preallocateBuffer, 8196);
     mp3 = new AudioGeneratorMP3();
     mp3->begin(buff, out);
-    audioFlag = true;
   } else {
     Serial.println("cannot open link");
   }
 }
-/*
-void moveServoMotor(uint16_t duration) {
-  Serial.print("Moved servo motor by 90 degrees for ");
-  Serial.print(duration);
-  Serial.print(" milliseconds");
-  Serial.println();
-  dispenser.write(180);
-  delay(duration);
-  dispenser.write(0);
-}
-*/
-/*
-// Pass number of seconds in milliseconds
-void toggleUVLight(uint16_t duration) {
-  Serial.print("UV light is on for ");
-  Serial.print(duration);
-  Serial.print(" milliseconds");
-  Serial.println();
-  digitalWrite(UVLIGHT_PIN, HIGH);
-  delay(duration);
-  digitalWrite(UVLIGHT_PIN, LOW);
-}
-*/
-/*
-void audioLoop() {
-  // Audio
-  if (audioFlag == true) {
-    static int lastms = 0;
-    if (mp3->isRunning()) {
-      if (millis() - lastms > 1000) {
-        lastms = millis();
-        Serial.printf("Running for %d ms...\n", lastms);
-        Serial.flush();
-      }
-      if (!mp3->loop()) {
-        audioFlag = false;
-        mp3->stop();
-        delete mp3;
-        mp3 = NULL;
-      }
-    } else {
-      Serial.println("Stopping radio");
-      audioFlag = false;
-      mp3->stop();
-      delete mp3;
-      mp3 = NULL;
-    }
-  }
-  return;
-}
-*/
+
 void startingLoop() {
-  while (Serial.available() > 0 && hasConnected == false) {
+  while (hasConnected == false && Serial.available() > 0) {
     // Retrieve credentials from serial... store in EEPROM, then restart device
     String credentials = Serial.readStringUntil('\0');
     int delimiterIndex = credentials.indexOf(';');
@@ -307,83 +202,62 @@ void startingLoop() {
   }
   return;
 }
-/*
-void scheduleLoop() {
-  if (isThereStoredSchedules == true) {
-    time_t now = time(nullptr); // Get current time
-    struct tm* timeinfo = localtime(&now); // Convert to local time
-    for (int currentScheduleIndex = 0; currentScheduleIndex < 10; currentScheduleIndex++) { // Loop over the stored schedule array to check which is the nearest time, break when empty...
-      if (feeding_schedules[currentScheduleIndex].h == -1 && feeding_schedules[currentScheduleIndex].m == -1) {
-        break;
-      } else {
-        // If we want the function to only execute once, then we actually check for the exact time! (include seconds) in comparison
-        if (timeinfo->tm_hour == feeding_schedules[currentScheduleIndex].h && timeinfo->tm_min == feeding_schedules[currentScheduleIndex].m && timeinfo->tm_sec == 0) {
-          //Serial.println("Sending duration for dispenser coming from ESP32");
-          moveServoMotor(feeding_schedules[currentScheduleIndex].d);
 
-          // Post data on database, first declare the necessary variables
-          StaticJsonDocument<256> doc;
-          String json;
-          char timeStr[32];
-
-          strftime(timeStr, sizeof(timeStr), "%a %d, %b, %I:%M %p", timeinfo);
-          doc["type"] = "Feed Log";
-          doc["didFail"] = false;
-          doc["duration"] = feeding_schedules[currentScheduleIndex].d / 1000;
-          doc["dateFinished"] = timeStr;
-
-          // Serialize the JSON object
-          serializeJson(doc, json);
-
-          // Define the HTTP client
-          HTTPClient http;
-          http.begin(wemos, CRUD_API + String("/api/logs/client/") + PRODUCT_ID); // Replace with your server URL
-          http.addHeader("Content-Type", "application/json");
-
-          // Send the POST request with JSON data
-          int httpResponseCode = http.POST(json);
-
-          // Check for response
-          if (httpResponseCode > 0) {
-            //String response = http.getString();
-            Serial.println("Successfully published to feeding log to database - Status Code: " + httpResponseCode);
-            //Serial.println(response);
-          } else {
-            Serial.println("Error sending feeding log to database! - Status Code: " + httpResponseCode);
-          }
-          http.end();
-        }
-      }
-    }
+void stopPlaying() {
+  isAudioPlaying = false;
+  // File formats
+  if (mp3) {
+    Serial.println("Stopping .mp3 audio");
+    mp3->stop();
+    delete mp3;
+    mp3 = NULL;
   }
-  return;
+  if (wav) {
+    Serial.println("Stopping .wav audio");
+    wav->stop();
+    delete wav;
+    wav = NULL;
+  }
+  // Audio variables
+  if (buff) {
+    buff->close();
+    delete buff;
+    buff = NULL;
+  }
+  if (file) {
+    file->close();
+    delete file;
+    file = NULL;
+  }
+  if (file_progmem) {
+    file_progmem->close();
+    delete file_progmem;
+    file_progmem = NULL;
+  }
+
 }
-*/
+
+void resetButtonHandler() {
+  if (isAudioPlaying == false) {
+    button.loop(); // MUST call the loop() function first
+    if (button.isPressed()) {
+      Serial.println("Erasing Wemos D1 EEPROM...");
+      delay(1000);
+      for (int i = 0; i < 96; i++) { // Erase EEPROM by writing 0 to each byte
+        EEPROM.write(i, 0);
+      }
+      EEPROM.commit(); // Save changes to EEPROM
+      delay(3000); // Wait for 3 seconds to avoid multiple erasures
+      EEPROM.end();
+      ESP.restart();
+    }
+  }  
+}
 
 void loop() {
   startingLoop();
-  static int lastms = 0;
-  if (audioFlag == true) {
-    if (mp3->isRunning()) {
-      if (millis() - lastms > 1000) {
-        lastms = millis();
-        Serial.printf("Running for %d ms...\n", lastms);
-        Serial.flush();
-      }
-      if (!mp3->loop()) {
-        mp3->stop();
-        audioFlag = false;
-        delete mp3;
-        mp3 = NULL;
-      }
-    } else {
-      Serial.println("Stopping audio");
-      audioFlag = false;
-      mp3->stop();
-      delete mp3;
-      mp3 = NULL;
-    }
-  }
+  resetButtonHandler();
   client.loop();
-  //scheduleLoop();
+  if (mp3 && !mp3->loop()) stopPlaying();
+  if (wav && !wav->loop()) stopPlaying();
 }
