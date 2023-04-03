@@ -35,7 +35,7 @@ PubSubClient client(wemos);
 void setup() {
   Serial.begin(9600);
   button.setDebounceTime(50);
-  Serial.setDebugOutput(true);
+  //Serial.setDebugOutput(true);
   EEPROM.begin(96);
 
   // Tries to check for credentials in EEPROM, if not it will just inform user from serial
@@ -78,17 +78,43 @@ void connectToWifi() {
   }
   Serial.println("Reading PSK -> " + pwd);
   if (!ssid.isEmpty() && !pwd.isEmpty()) {
+
+    IPAddress ip(192, 168, 8, 32); // where xx is the desired IP Address
+    IPAddress gateway(192, 168, 8, 1); // set gateway to match your network
+    Serial.print(F("Setting static ip to : "));
+    Serial.println(ip);
+    IPAddress subnet(255, 255, 255, 0); // set subnet mask to match your
+    IPAddress primaryDns(192, 168, 8, 1); 
+    WiFi.config(ip, gateway, subnet, primaryDns);
+    
     WiFi.hostname("Wemos-D1");
+    WiFi.persistent(false); //These 3 lines are a required work around
     /*
-      WiFi.persistent(false); //These 3 lines are a required work around
-      WiFi.mode(WIFI_OFF);    //otherwise the module will not reconnect
-      WiFi.forceSleepWake();
-      WiFi.setSleepMode(WIFI_NONE_SLEEP);
-      WiFi.mode(WIFI_STA);
-      Serial.println("Connecting to access point");
+    
+    WiFi.mode(WIFI_OFF);    //otherwise the module will not reconnect
+    WiFi.forceSleepWake();
+    WiFi.setSleepMode(WIFI_NONE_SLEEP);
     */
+    WiFi.setPhyMode(WIFI_PHY_MODE_11B);
+    WiFi.mode(WIFI_STA);
+    Serial.println("Connecting to access point");
+
     WiFi.begin(ssid.c_str(), pwd.c_str());
     while (WiFi.status() != WL_CONNECTED) {
+      button.loop(); // MUST call the loop() function first
+
+      if (button.isPressed()) {
+        Serial.println("Erasing WEMOS-D1 EEPROM...");
+        delay(1000);
+        for (int i = 0; i < 2048; i++) { // Erase EEPROM by writing 0 to each byte
+          delay(50);
+          EEPROM.write(i, 0);
+        }
+        EEPROM.commit(); // Save changes to EEPROM
+        delay(3000); // Wait for 3 seconds to avoid multiple erasures
+        EEPROM.end();
+        ESP.restart();
+      }
       delay(500);
       Serial.print(".");
     }
@@ -143,13 +169,13 @@ void messageReceived(char* topic, byte * payload, unsigned int length) {
       Serial.println(message);
       playAudio(message);
     }
-  } 
+  }
   /*
-  else if (strcmp(topic, RESET_WEMOS_TOPIC) == 0) {
+    else if (strcmp(topic, RESET_WEMOS_TOPIC) == 0) {
     if (String(message) == "reset") {
       clearEEPROM();
     }
-  }
+    }
   */
   return;
 }
@@ -174,6 +200,7 @@ void playAudio(const char* URL) {
     mp3->begin(buff, out);
   } else {
     Serial.println("cannot open link");
+    ESP.restart();
   }
 }
 
@@ -251,7 +278,7 @@ void resetButtonHandler() {
       EEPROM.end();
       ESP.restart();
     }
-  }  
+  }
 }
 
 void loop() {

@@ -29,7 +29,7 @@
 #define VSYNC_GPIO_NUM    25
 #define HREF_GPIO_NUM     23
 #define PCLK_GPIO_NUM     22
-#define LED_GPIO_NUM      33
+//#define GPIO_LED_NUM      33
 
 // Set up hardware serial to send data to the arduino
 HardwareSerial sendToArduino(1);
@@ -47,6 +47,7 @@ bool streamToggled = false;
 bool isThereStoredSchedules = false;
 #define UVLIGHT_PIN 15
 #define DISPENSER_PIN 14
+#define LED_INDICATOR_PIN 33
 #define RESETBTN_PIN 2
 ezButton button(RESETBTN_PIN);  // create ezButton object that attach to pin 2
 
@@ -64,9 +65,9 @@ TimeData feeding_schedules[10];
 
 void setup() { // TODO: EEPROM for wifi and ssid, also connection to database...
   Serial.begin(115200);
-  //pinMode(RESETBTN_PIN, INPUT); // Use GPIO2 of ESP32-Cam which will act as reset button
   button.setDebounceTime(50);
   pinMode(UVLIGHT_PIN, OUTPUT);
+  pinMode(LED_INDICATOR_PIN, OUTPUT); // Built-in led
   dispenser.attach(DISPENSER_PIN); // Use GPIO14 of ESP32-Cam for servo motor
   EEPROM.begin(2048); // Use about 2KB of EEPROM
 
@@ -85,6 +86,7 @@ void setup() { // TODO: EEPROM for wifi and ssid, also connection to database...
   }
   dispenser.write(0); // Reset servo first
   Serial.println("Resetted dispenser to 0 degrees");
+  digitalWrite(LED_INDICATOR_PIN, LOW);
 }
 
 void saveScheduleToEEPROM() {
@@ -120,18 +122,7 @@ void readScheduleFromEEPROM() {
     Serial.println("There are no schedules set...");
   }
 }
-/*
-  bool debounceButton() {
-  bool stateNow = digitalRead(RESETBTN_PIN);
-  if (stateNow != LOW) {
-    delay(100);
-    stateNow = digitalRead(RESETBTN_PIN);
-  } else {
-    delay(100);
-  }
-  return stateNow;
-  }
-*/
+
 // Pass number of seconds in milliseconds
 void moveServoMotor(uint16_t duration) {
   servoTimer.set(duration);
@@ -139,7 +130,7 @@ void moveServoMotor(uint16_t duration) {
   Serial.print(duration);
   Serial.print(" milliseconds");
   Serial.println();
-  dispenser.write(90);
+  dispenser.write(145);
   servoTimer.start();
 }
 
@@ -150,9 +141,7 @@ void toggleUVLight(unsigned long duration) {
   Serial.print(duration);
   Serial.print(" milliseconds");
   Serial.println();
-
   digitalWrite(UVLIGHT_PIN, HIGH);
-
   uvTimer.start();
 }
 
@@ -181,7 +170,6 @@ void ConnectToMQTT() {
   client.subscribe(FEED_SCHEDULE_TOPIC, 1);
   client.subscribe(UVLIGHT_DURATION_TOPIC, 1);
   client.subscribe(TOGGLE_STREAM_TOPIC, 1);
-  client.subscribe(RESET_ESP_TOPIC, 1);
   return;
 }
 
@@ -211,20 +199,24 @@ void CameraInit() {
   //config.pixel_format = PIXFORMAT_RGB565; // for face detection/recognition
   config.grab_mode = CAMERA_GRAB_WHEN_EMPTY;
   config.fb_location = CAMERA_FB_IN_PSRAM;
-  config.jpeg_quality = 24; // From 10-63 (lower means higher quality)
+  config.jpeg_quality = 32; // From 10-63 (lower means higher quality)
   config.fb_count = 2;
 
   // camera init
   esp_err_t err = esp_camera_init(&config);
   if (err != ESP_OK) {
     Serial.printf("Camera init failed with error 0x%x", err);
+    delay(2000); // Add 2 seconds delay probably
     ESP.restart(); // Restart the device
-    return;
   }
   Serial.println("Initialized camera successfully");
+  // Flip the camera
+  sensor_t * s = esp_camera_sensor_get(); 
+  s->set_vflip(s, 1);
 }
 
 void getImage() {
+  // Make sure to turn off LED indicator light
   camera_fb_t *fb = esp_camera_fb_get();
   // Check if there's an image with jpeg format, and is less than 32kb
   if (fb != NULL && fb->format == PIXFORMAT_JPEG && fb->len < 32768) {
@@ -282,8 +274,29 @@ void ConnectToWifi() {
     // Wait for WiFi to connect to AP
     Serial.println("Waiting for WiFi");
     while (WiFi.status() != WL_CONNECTED) {
+      // RESET HANDLER IF THERE IS NO WIFI
+      button.loop(); // MUST call the loop() function first
+
+      if (button.isPressed()) {
+        Serial.println("Erasing ESP32 EEPROM...");
+        delay(1000);
+        for (int i = 0; i < 2048; i++) { // Erase EEPROM by writing 0 to each byte
+          digitalWrite(LED_INDICATOR_PIN, LOW);
+          delay(50);
+          EEPROM.write(i, 0);
+          digitalWrite(LED_INDICATOR_PIN, HIGH);
+          delay(50);
+        }
+        EEPROM.commit(); // Save changes to EEPROM
+        delay(3000); // Wait for 3 seconds to avoid multiple erasures
+        EEPROM.end();
+        ESP.restart();
+      }
+      digitalWrite(LED_INDICATOR_PIN, LOW);
       delay(500);
       Serial.print(".");
+      digitalWrite(LED_INDICATOR_PIN, HIGH);
+      delay(500);
     }
     Serial.println("WiFi successfully connected");
     // Send in ssid and password to the other microcontroller via Serial communication
@@ -298,8 +311,11 @@ void ConnectToWifi() {
     // Wait for SmartConfig packet from mobile
     Serial.println("Waiting for SmartConfig.");
     while (!WiFi.smartConfigDone()) {
-      delay(500);
+      digitalWrite(LED_INDICATOR_PIN, LOW);
+      delay(2000);
       Serial.print(".");
+      digitalWrite(LED_INDICATOR_PIN, HIGH);
+      delay(2000);
     }
 
     Serial.println("");
@@ -308,8 +324,11 @@ void ConnectToWifi() {
     // Wait for WiFi to connect to AP
     Serial.println("Waiting for WiFi");
     while (WiFi.status() != WL_CONNECTED) {
+      digitalWrite(LED_INDICATOR_PIN, LOW);
       delay(500);
       Serial.print(".");
+      digitalWrite(LED_INDICATOR_PIN, HIGH);
+      delay(500);
     }
     Serial.println("WiFi connected: ");
 
@@ -357,8 +376,10 @@ void messageReceived(char* topic, byte* payload, unsigned int length) {
     // On and Off
     if (String(message) == "on") {
       streamToggled = true;
+      delay(1000);
     } else if (String(message) == "off") {
       streamToggled = false;
+      delay(1000);
     }
   } else if (strcmp(topic, AUTH_TOPIC) == 0) {
     StaticJsonDocument<32> doc;
@@ -415,7 +436,9 @@ void messageReceived(char* topic, byte* payload, unsigned int length) {
       client.publish(UVLIGHT_DURATION_RESPONSE_TOPIC, "true");
       client.publish(NOTIFICATION_TOPIC, "uv-success");
     }
-  } else if (strcmp(topic, RESET_ESP_TOPIC) == 0) {
+  } 
+  /*
+  else if (strcmp(topic, RESET_ESP_TOPIC) == 0) {
     if (String(message) == "reset") {
       Serial.println("Erasing EEPROM...");
       delay(1000);
@@ -426,7 +449,7 @@ void messageReceived(char* topic, byte* payload, unsigned int length) {
       delay(3000); // Wait for 3 seconds to avoid multiple erasures
       ESP.restart();
     }
-  }
+  }*/
   return;
 }
 
@@ -484,18 +507,22 @@ void scheduleLoop() {
 void loop() {
   button.loop(); // MUST call the loop() function first
 
-  if(button.isPressed()) {
+  if (button.isPressed()) {
     Serial.println("Erasing ESP32 EEPROM...");
     delay(1000);
     for (int i = 0; i < 2048; i++) { // Erase EEPROM by writing 0 to each byte
+      digitalWrite(LED_INDICATOR_PIN, LOW);
+      delay(50);
       EEPROM.write(i, 0);
+      digitalWrite(LED_INDICATOR_PIN, HIGH);
+      delay(50);
     }
     EEPROM.commit(); // Save changes to EEPROM
     delay(3000); // Wait for 3 seconds to avoid multiple erasures
     EEPROM.end();
     ESP.restart();
   }
-  
+
   if (servoTimer.done()) {
     Serial.println("Done dispensing food... restoring back to original position");
     dispenser.write(0);
@@ -513,7 +540,10 @@ void loop() {
   // RESET DEVICE HANDLER
   if (streamToggled == true && client.connected() == true) {
     getImage();
+  } 
+  if (WiFi.status() != WL_CONNECTED) {
+    // Connect to MQTT
+    ESP.restart();
   }
-
   client.loop();
 }
